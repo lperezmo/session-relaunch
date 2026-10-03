@@ -1,7 +1,7 @@
 import { describe, expect, test, tier } from 'claude-code/testing'
 
 import { mcpChange } from '../hooks/mcp-change'
-import { asPending, commandLine, isFresh, isModelFlag, parseArgs, parseLaunch } from '../hooks/parse'
+import { asPending, commandLine, isFresh, isModelFlag, isWindowsPath, parseArgs, parseLaunch } from '../hooks/parse'
 import { USAGE } from '../hooks/register'
 
 tier('user')
@@ -56,7 +56,7 @@ describe('parseLaunch', () => {
   test('anything else is a failure naming stderr, then stdout', () => {
     expect(parseLaunch('garbage', 'boom')).toEqual({ ok: false, error: 'boom' })
     expect(parseLaunch('garbage', '')).toEqual({ ok: false, error: 'garbage' })
-    expect(parseLaunch('', '')).toEqual({ ok: false, error: 'relaunch.ps1 printed nothing' })
+    expect(parseLaunch('', '')).toEqual({ ok: false, error: 'the relaunch helper printed nothing' })
     expect(parseLaunch('{"pid":1}', '')).toEqual({ ok: false, error: '{"pid":1}' })
   })
 
@@ -200,5 +200,18 @@ describe('register', () => {
     await $.tool.call({ tool: 'Write', file_path: 'D:\\x\\notes.md', content: '' })
 
     expect(logged).toEqual([])
+  })
+})
+
+describe('isWindowsPath', () => {
+  test('drive letters and UNC shares are Windows', () => {
+    expect(isWindowsPath('C:\\Users\\me\\.claude\\plugins\\session-relaunch')).toBe(true)
+    expect(isWindowsPath('d:/Python/session-relaunch')).toBe(true)
+    expect(isWindowsPath('\\\\server\\share\\plugin')).toBe(true)
+  })
+
+  test('POSIX paths are not', () => {
+    expect(isWindowsPath('/home/me/.claude/plugins/session-relaunch')).toBe(false)
+    expect(isWindowsPath('/Users/me/.claude/plugins/session-relaunch')).toBe(false)
   })
 })

@@ -1,0 +1,103 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  relaunch-sh:
+    name: relaunch.sh (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install tmux, xterm and Xvfb
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q tmux xterm xvfb xauth xfonts-base
+
+      - name: Install tmux
+        if: runner.os == 'macOS'
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+          HOMEBREW_NO_INSTALL_CLEANUP: '1'
+        run: brew install tmux
+
+      - name: ShellCheck
+        if: runner.os == 'Linux'
+        run: shellcheck -S error plugins/session-relaunch/hooks/relaunch.sh .github/relaunch-sh/relaunch_sh_test.sh
+
+      # tmux and xterm tabs open for real; Xvfb gives xterm a display.
+      - name: Test
+        if: runner.os == 'Linux'
+        run: xvfb-run -a bash .github/relaunch-sh/relaunch_sh_test.sh
+
+      # /bin/bash is 3.2 here, the one macOS users have. It runs the test,
+      # relaunch.sh and the tab script, and argv comes from KERN_PROCARGS2.
+      - name: Test under /bin/bash 3.2
+        if: runner.os == 'macOS'
+        env:
+          RELAUNCH_BASH: /bin/bash
+        run: /bin/bash .github/relaunch-sh/relaunch_sh_test.sh
+
+      # Terminal.app is driven by osascript, which needs the Automation
+      # permission. The image grants osascript that for Finder, not Terminal,
+      # so this grants it the same way and tries. Allowed to fail.
+      - name: Terminal.app (experimental)
+        if: runner.os == 'macOS'
+        continue-on-error: true
+        timeout-minutes: 5
+        env:
+          RELAUNCH_BASH: /bin/bash
+          RELAUNCH_TEST_TERMINAL_APP: '1'
+          ONLY: terminal_app_resume
+        run: |
+          now=$(date +%s)
+          db="$HOME/Library/Application Support/com.apple.TCC/TCC.db"
+          sqlite3 "$db" "INSERT OR REPLACE INTO access VALUES('kTCCServiceAppleEvents','/usr/bin/osascript',1,2,0,1,NULL,NULL,0,'com.apple.Terminal',NULL,NULL,$now,NULL,NULL,'UNUSED',$now);" \
+            || echo "could not write the TCC database"
+          /bin/bash .github/relaunch-sh/relaunch_sh_test.sh
+
+  bun-test:
+    name: bun test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: oven-sh/setup-bun@v2
+
+      # claude-code/testing comes with Claude Code. This stand-in runs the
+      # pure tests under bun and skips the ones that take the engine ($, on),
+      # which only Claude Code's own runner can drive.
+      - name: Stand in for claude-code/testing
+        run: |
+          mkdir -p node_modules/claude-code
+          cat > node_modules/claude-code/package.json <<'EOF'
+          { "name": "claude-code", "version": "0.0.0", "type": "module", "exports": { "./testing": "./testing.ts" } }
+          EOF
+          cat > node_modules/claude-code/testing.ts <<'EOF'
+          import { describe, expect, test as bunTest } from 'bun:test'
+
+          export { describe, expect }
+
+          export function test(name: string, fn: (...args: any[]) => unknown): void {
+            if (fn.length > 0) bunTest.skip(name, () => {})
+            else bunTest(name, fn as () => unknown)
+          }
+
+          export function tier(_tier: string): void {}
+          EOF
+
+      - run: bun test

@@ -60,7 +60,17 @@ export function parseLaunch(stdout: string, stderr: string): LaunchResult {
     // Fall through to the failure below.
   }
 
-  return { ok: false, error: (stderr || stdout || 'relaunch.ps1 printed nothing').trim() }
+  return { ok: false, error: (stderr || stdout || 'the relaunch helper printed nothing').trim() }
+}
+
+/**
+ * Whether the plugin lives at a Windows path (`C:\...`, `C:/...` or a UNC
+ * share), which picks relaunch.ps1 over relaunch.sh.
+ *
+ * @param path the plugin root
+ */
+export function isWindowsPath(path: string): boolean {
+  return /^[A-Za-z]:[\\/]|^\\\\/.test(path)
 }
 
 /** `exe args...` as one line, quoting the parts that hold spaces. */

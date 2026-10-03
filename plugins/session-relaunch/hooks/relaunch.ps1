@@ -32,10 +32,10 @@ $DropWithValue = @('-r', '--resume', '--session-id', '--from-pr')
 # Splits a command line the way the MSVC runtime builds argv, so
 # --flag="a b" and "--flag=a b" both come back as the one value --flag=a b.
 function Split-CommandLine([string]$line) {
-    $tokens = New-Object System.Collections.Generic.List[string]
+    $parts = New-Object System.Collections.Generic.List[string]
     $sb = New-Object System.Text.StringBuilder
     $inQuotes = $false
-    $hasToken = $false
+    $hasPart = $false
     $i = 0
 
     while ($i -lt $line.Length) {
@@ -57,7 +57,7 @@ function Split-CommandLine([string]$line) {
                 [void]$sb.Append([char]'\', $n)
             }
 
-            $hasToken = $true
+            $hasPart = $true
             continue
         }
 
@@ -70,15 +70,15 @@ function Split-CommandLine([string]$line) {
                 $i++
             }
 
-            $hasToken = $true
+            $hasPart = $true
             continue
         }
 
         if (-not $inQuotes -and ($c -eq [char]' ' -or $c -eq [char]"`t")) {
-            if ($hasToken) {
-                $tokens.Add($sb.ToString())
+            if ($hasPart) {
+                $parts.Add($sb.ToString())
                 [void]$sb.Clear()
-                $hasToken = $false
+                $hasPart = $false
             }
 
             $i++
@@ -86,13 +86,13 @@ function Split-CommandLine([string]$line) {
         }
 
         [void]$sb.Append($c)
-        $hasToken = $true
+        $hasPart = $true
         $i++
     }
 
-    if ($hasToken) { $tokens.Add($sb.ToString()) }
+    if ($hasPart) { $parts.Add($sb.ToString()) }
 
-    return , $tokens
+    return , $parts
 }
 
 # The nearest claude ancestor: claude.exe itself, or a node/bun process whose
@@ -109,15 +109,15 @@ function Find-ClaudeAncestor {
         }
 
         if ($proc.Name -ieq 'claude.exe') {
-            return [pscustomobject]@{ Process = $proc; Tokens = (Split-CommandLine $proc.CommandLine); ScriptIndex = 0 }
+            return [pscustomobject]@{ Process = $proc; Parts = (Split-CommandLine $proc.CommandLine); ScriptIndex = 0 }
         }
 
         if ($proc.Name -match '^(node|bun)(\.exe)?$') {
-            $tokens = Split-CommandLine $proc.CommandLine
+            $parts = Split-CommandLine $proc.CommandLine
 
-            for ($j = 1; $j -lt $tokens.Count; $j++) {
-                if ($tokens[$j] -match '(?i)(claude-code[\\/].*\.[cm]?js|[\\/]claude(\.[cm]?js)?)$') {
-                    return [pscustomobject]@{ Process = $proc; Tokens = $tokens; ScriptIndex = $j }
+            for ($j = 1; $j -lt $parts.Count; $j++) {
+                if ($parts[$j] -match '(?i)(claude-code[\\/].*\.[cm]?js|[\\/]claude(\.[cm]?js)?)$') {
+                    return [pscustomobject]@{ Process = $proc; Parts = $parts; ScriptIndex = $j }
                 }
             }
         }
@@ -126,19 +126,19 @@ function Find-ClaudeAncestor {
     return $null
 }
 
-function Get-KeptArgs($tokens, [int]$scriptIndex, [string]$model) {
+function Get-KeptArgs($parts, [int]$scriptIndex, [string]$model) {
     $kept = New-Object System.Collections.Generic.List[string]
 
-    for ($i = $scriptIndex + 1; $i -lt $tokens.Count; $i++) {
-        $token = $tokens[$i]
-        $name = $token.Split('=')[0]
+    for ($i = $scriptIndex + 1; $i -lt $parts.Count; $i++) {
+        $part = $parts[$i]
+        $name = $part.Split('=')[0]
 
         if ($DropAlone -ccontains $name) {
             continue
         }
 
         if ($DropWithValue -ccontains $name) {
-            if (-not $token.Contains('=') -and $i + 1 -lt $tokens.Count -and -not $tokens[$i + 1].StartsWith('-')) {
+            if (-not $part.Contains('=') -and $i + 1 -lt $parts.Count -and -not $parts[$i + 1].StartsWith('-')) {
                 $i++
             }
 
@@ -146,14 +146,14 @@ function Get-KeptArgs($tokens, [int]$scriptIndex, [string]$model) {
         }
 
         if ($model -and $name -ceq '--model') {
-            if (-not $token.Contains('=') -and $i + 1 -lt $tokens.Count) {
+            if (-not $part.Contains('=') -and $i + 1 -lt $parts.Count) {
                 $i++
             }
 
             continue
         }
 
-        $kept.Add($token)
+        $kept.Add($part)
     }
 
     if ($model) {
@@ -273,18 +273,18 @@ try {
     }
 
     $proc = $ancestor.Process
-    $kept = Get-KeptArgs $ancestor.Tokens $ancestor.ScriptIndex $Model
+    $kept = Get-KeptArgs $ancestor.Parts $ancestor.ScriptIndex $Model
     $argList = @('--resume', $SessionId) + $kept
 
     if (Get-Command claude -CommandType Application, ExternalScript -ErrorAction SilentlyContinue) {
         $exe = 'claude'
     } else {
         $exe = $proc.ExecutablePath
-        if (-not $exe) { $exe = $ancestor.Tokens[0] }
+        if (-not $exe) { $exe = $ancestor.Parts[0] }
 
         # node.exe needs the CLI script ahead of the CLI's own flags.
         if ($ancestor.ScriptIndex -gt 0) {
-            $argList = @($ancestor.Tokens[$ancestor.ScriptIndex]) + $argList
+            $argList = @($ancestor.Parts[$ancestor.ScriptIndex]) + $argList
         }
     }
 
