@@ -2,8 +2,9 @@
  * session-relaunch: `/relaunch` restarts this session in a new terminal tab
  * with `claude --resume <id>`, so MCP servers added since it started load.
  *
- * Steps: optionally compact, have relaunch.ps1 open a tab that waits for this
- * claude.exe to exit and then resumes the same session id with the same flags
+ * Steps: optionally compact, have relaunch.ps1 (Windows) or relaunch.sh open
+ * a tab that waits for this claude to exit and then resumes the same session
+ * id with the same flags
  * (plus the current model when /model changed it), leave a record in the
  * store for the new process to welcome itself back with, then exit this one.
  * Resuming by id rather than `--continue` picks the right session when
@@ -24,6 +25,7 @@ import {
   commandLine,
   isFresh,
   isModelFlag,
+  isWindowsPath,
   parseArgs,
   parseLaunch,
   PENDING_PREFIX,
@@ -90,7 +92,7 @@ function exitSoon($: EngineInterface, opened: string) {
 type Launched = { ok: true; opened: string } | { ok: false; text: string }
 
 /**
- * Opens the new tab through relaunch.ps1 and leaves the welcome-back record.
+ * Opens the new tab through relaunch.ps1 or relaunch.sh and leaves the welcome-back record.
  *
  * @param $ the engine interface
  * @param stay whether the new tab waits for this session without a time limit
@@ -101,25 +103,16 @@ async function launch($: EngineInterface, stay: boolean, note: string, startMode
   const sessionId = await $.session.id()
   const cwd = await $.session.cwd()
   const model = await $.session.model()
-  const script = `${$.plugin.root}\\hooks\\relaunch.ps1`
+  const root = $.plugin.root
+  const wait = String(stay ? 0 : WAIT_SECONDS)
+  const windows = isWindowsPath(root)
 
-  const argv = [
-    'powershell.exe',
-    '-NoProfile',
-    '-ExecutionPolicy',
-    'Bypass',
-    '-File',
-    script,
-    '-SessionId',
-    sessionId,
-    '-Cwd',
-    cwd,
-    '-WaitSeconds',
-    String(stay ? 0 : WAIT_SECONDS),
-  ]
+  const argv = windows
+    ? ['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', `${root}\\hooks\\relaunch.ps1`, '-SessionId', sessionId, '-Cwd', cwd, '-WaitSeconds', wait]
+    : ['bash', `${root}/hooks/relaunch.sh`, '--session-id', sessionId, '--cwd', cwd, '--wait-seconds', wait]
 
   if (isModelFlag(model) && model !== startModel) {
-    argv.push('-Model', model)
+    argv.push(windows ? '-Model' : '--model', model)
   }
 
   const run = await $.process.run(argv)

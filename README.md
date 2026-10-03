@@ -4,8 +4,7 @@
 MCP servers you added since it started get loaded. It resumes this exact
 session by id, so it works even with several sessions open.
 
-Windows only for now (macOS and Linux are in progress). Needs Claude Code
-2.1.287 or later.
+Works on Windows, macOS and Linux. Needs Claude Code 2.1.287 or later.
 
 ## Install
 
@@ -33,8 +32,10 @@ prompt is part of the command line and gets sent again on relaunch.
 ## What it does on your machine
 
 - **Commands it runs:** `/exit` after opening the new tab (and `/compact` with `compact`).
-- **Programs it starts:** `powershell.exe` with `hooks/relaunch.ps1`, which opens a
-  Windows Terminal tab running `claude --resume <session id>` with your original flags.
+- **Programs it starts:** `powershell.exe` with `hooks/relaunch.ps1` on Windows, `bash` with
+  `hooks/relaunch.sh` elsewhere. Each opens a terminal tab (Windows Terminal, tmux, iTerm,
+  Terminal.app, GNOME Terminal and others) running `claude --resume <session id>` with your
+  original flags.
 - **Hooks:** the `/relaunch` command, and after Bash, PowerShell, Write and Edit tool calls a
   check for MCP config changes. It never changes a call or its result.
 - **What it reads:** the session id, folder, model, your note, and tool calls that change MCP config.
