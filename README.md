@@ -35,6 +35,8 @@ prompt is part of the command line and gets sent again on relaunch.
 - **Commands it runs:** `/exit` after opening the new tab (and `/compact` with `compact`).
 - **Programs it starts:** `powershell.exe` with `hooks/relaunch.ps1`, which opens a
   Windows Terminal tab running `claude --resume <session id>` with your original flags.
+- **Hooks:** the `/relaunch` command, and after Bash, PowerShell, Write and Edit tool calls a
+  check for MCP config changes. It never changes a call or its result.
 - **What it reads:** the session id, folder, model, your note, and tool calls that change MCP config.
   No credentials.
 - **What it stores:** the session id and note, locally, until the new session reads them.
