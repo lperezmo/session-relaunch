@@ -8,5 +8,8 @@
   },
   "homepage": "https://github.com/lperezmo/session-relaunch",
   "repository": "https://github.com/lperezmo/session-relaunch",
+  "documentationUrl": "https://github.com/lperezmo/session-relaunch/blob/main/plugins/session-relaunch/README.md",
+  "supportUrl": "https://github.com/lperezmo/session-relaunch/issues",
+  "privacyPolicyUrl": "https://github.com/lperezmo/session-relaunch/blob/main/plugins/session-relaunch/README.md#what-it-does-on-your-machine",
   "license": "MIT"
 }
