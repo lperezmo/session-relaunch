@@ -3,6 +3,21 @@
 `/relaunch` restarts the current Claude Code session so MCP servers added since
 it started are loaded, without copying a `claude --resume <id>` command by hand.
 
+Windows only for now (PowerShell 5.1, Windows Terminal preferred); macOS and
+Linux support is planned. Needs Claude Code 2.1.287 or later, where mods are on
+by default.
+
+## Install
+
+```
+/plugin marketplace add lperezmo/session-relaunch
+/plugin install session-relaunch@session-relaunch
+```
+
+Or try it from a clone with `claude --plugin-dir ./session-relaunch`.
+
+## Usage
+
 ```
 /relaunch            reopen this session in a new tab and exit this one
 /relaunch compact    compact first, then relaunch
@@ -27,5 +42,10 @@ How it works:
 without opening anything.
 
 Limits: a positional prompt in the original command line (`claude "do X"`) is
-carried over and would be sent again. Mods in `~/.claude/skills/` do not
-hot-reload, so edits take effect in the next session.
+carried over and would be sent again. The helper runs with
+`-ExecutionPolicy Bypass` and reads the parent process's command line to reuse
+its flags. The TypeScript module loads as-is; there is no build step.
+
+## License
+
+MIT
