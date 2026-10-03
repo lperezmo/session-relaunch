@@ -1,11 +1,11 @@
 # session-relaunch
 
-`/relaunch` restarts the current Claude Code session so MCP servers added since
-it started are loaded, without copying a `claude --resume <id>` command by hand.
+`/relaunch` restarts the current Claude Code session in a new terminal tab, so
+MCP servers you added since it started get loaded. It resumes this exact
+session by id, so it works even with several sessions open.
 
-Windows only for now (PowerShell 5.1, Windows Terminal preferred); macOS and
-Linux support is planned. Needs Claude Code 2.1.287 or later, where mods are on
-by default.
+Windows only for now (macOS and Linux are in progress). Needs Claude Code
+2.1.287 or later.
 
 ## Install
 
@@ -14,56 +14,41 @@ by default.
 /plugin install session-relaunch@session-relaunch
 ```
 
-Or try it from a clone with `claude --plugin-dir ./session-relaunch`.
-
 ## Usage
 
 ```
-/relaunch                 ask: relaunch now, compact first, or open the tab and stay
+/relaunch                 asks: relaunch now, compact first, or open the tab and stay
 /relaunch now [note]      reopen this session in a new tab and exit this one
 /relaunch compact [note]  compact first (the note steers the summary), then relaunch
 /relaunch stay [note]     open the new tab; it starts once you /exit here
-/relaunch <note>          text without a keyword is a note; it still asks first
 /relaunch help            show this
 ```
 
-Only the first word can be a keyword, so a typo like `/relaunch stya` becomes a
-note and opens the dialog instead of relaunching on the spot. The note is typed
-into the new session's prompt box, and the new session shows a
-"Resumed via /relaunch" toast. With `compact`, the note is also handed to the
-compaction as its instructions, the same as `/compact <note>`, so the summary
-keeps what it names.
+The note is typed into the new session's prompt box. When a tool call adds or
+removes an MCP server, the mod prints a one-line reminder to `/relaunch`.
 
-When a tool call changes the MCP configuration (`claude mcp add`, `remove`,
-`add-json`, or an edit to a `.mcp.json`), the mod prints one line suggesting
-`/relaunch`. The line is for you only; the model never sees it.
+One catch: if you started the session with a prompt (`claude "do X"`), that
+prompt is part of the command line and gets sent again on relaunch.
 
-How it works:
+## What it does on your machine
 
-1. `register.ts` reads the session id and cwd from `$.session`, so the right
-   session comes back even with several open (unlike `--continue`).
-2. `hooks/relaunch.ps1` walks up to the parent claude process (`claude.exe`,
-   or node/bun running the npm CLI), reuses its command line minus
-   `-r/--resume`, `-c/--continue`, `--session-id`, `--fork-session`,
-   `--from-pr` and `-p/--print`, and opens a new Windows Terminal tab
-   (`wt -w 0 new-tab`) titled with the folder and a short session id, or a
-   plain console window outside WT. The new tab runs `claude` from PATH, so an
-   auto-update in between is picked up.
-3. If you switched models with `/model` mid-session, the new tab gets
-   `--model <current model>`.
-4. The new tab waits for the old process to exit (up to 2 minutes; no limit
-   with `stay`) before running `claude --resume <id> <kept flags>`, so two
-   processes never write the same transcript.
-5. The mod then runs `/exit` just after replying. If that is refused, it says
-   so and you type `/exit` yourself.
-
-`relaunch.ps1 -SessionId <id> -Cwd <dir> -DryRun` prints what it would launch
-without opening anything.
-
-Limits: a positional prompt in the original command line (`claude "do X"`) is
-carried over and would be sent again. The helper runs with
-`-ExecutionPolicy Bypass` and reads the parent process's command line to reuse
-its flags. The TypeScript module loads as-is; there is no build step.
+- **Runs a command:** `/exit`, right after it opens the new tab, so the old
+  session closes and the new one takes over. With `compact` it also compacts
+  the session first, the same as `/compact <note>`.
+- **Starts programs:** `powershell.exe` running the bundled
+  `hooks/relaunch.ps1` with this session's id, folder, a wait time and (if you
+  switched with `/model`) the model. That script reads the parent `claude`
+  process's command line to reuse its flags, then opens a Windows Terminal tab
+  (`wt.exe`, or a plain PowerShell window) that waits for the old session to
+  exit and runs `claude --resume <id>` with those flags.
+- **Reads:** the session id, working folder and model, your note, and the
+  command line of tool calls that look like MCP config changes
+  (`claude mcp add/remove`, edits to `.mcp.json`).
+- **Stores:** the session id and note in the plugin's local store for up to 12
+  hours, so the new session can show "Resumed via /relaunch" and fill in the
+  note. It is deleted once read.
+- **Sends:** nothing. There are no network calls; everything stays on your
+  machine.
 
 ## License
 
