@@ -81,7 +81,8 @@ function exitSoon($: EngineInterface, opened: string) {
     $.command.run({ command: 'exit' }).catch((error: unknown) => {
       const reason = error instanceof Error ? error.message : String(error)
 
-      $.ui.log(`${opened}\nCould not exit this session automatically (${reason}); type /exit and the new tab takes over.`)
+      $.ui.log(opened)
+      $.ui.log(`Could not exit this session automatically (${reason}); type /exit and the new tab takes over.`)
     })
   })
 }
@@ -143,7 +144,8 @@ async function launch($: EngineInterface, stay: boolean, note: string, startMode
 /**
  * Compacts, then relaunches, once /relaunch has answered: the host refuses
  * `$.session.compact` from inside a `command.run` hook (it would compact under
- * the turn the hook holds). Progress goes to the transcript as `ui.log` lines.
+ * the turn the hook holds). Progress goes to the transcript as `ui.log` lines,
+ * one call per line since a log line does not break on `\n`.
  * The note doubles as the compaction instructions, like `/compact <text>`.
  *
  * @param $ the engine interface
@@ -168,7 +170,8 @@ async function compactThenRelaunch($: EngineInterface, note: string, startModel:
       return
     }
 
-    $.ui.log(`${launched.opened}\nExiting this session...`)
+    $.ui.log(launched.opened)
+    $.ui.log('Exiting this session...')
     exitSoon($, launched.opened)
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error)

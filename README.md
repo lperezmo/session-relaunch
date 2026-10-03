@@ -21,7 +21,7 @@ Or try it from a clone with `claude --plugin-dir ./session-relaunch`.
 ```
 /relaunch                 ask: relaunch now, compact first, or open the tab and stay
 /relaunch now [note]      reopen this session in a new tab and exit this one
-/relaunch compact [note]  compact first, then relaunch
+/relaunch compact [note]  compact first (the note steers the summary), then relaunch
 /relaunch stay [note]     open the new tab; it starts once you /exit here
 /relaunch <note>          text without a keyword is a note; it still asks first
 /relaunch help            show this
