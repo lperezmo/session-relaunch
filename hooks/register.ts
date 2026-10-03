@@ -86,6 +86,96 @@ function exitSoon($: EngineInterface, opened: string) {
   })
 }
 
+type Launched = { ok: true; opened: string } | { ok: false; text: string }
+
+/**
+ * Opens the new tab through relaunch.ps1 and leaves the welcome-back record.
+ *
+ * @param $ the engine interface
+ * @param stay whether the new tab waits for this session without a time limit
+ * @param note the note for the new session's prompt box, possibly empty
+ * @param startModel the model the session started on, so only a change is carried
+ */
+async function launch($: EngineInterface, stay: boolean, note: string, startModel: string | undefined): Promise<Launched> {
+  const sessionId = await $.session.id()
+  const cwd = await $.session.cwd()
+  const model = await $.session.model()
+  const script = `${$.plugin.root}\\hooks\\relaunch.ps1`
+
+  const argv = [
+    'powershell.exe',
+    '-NoProfile',
+    '-ExecutionPolicy',
+    'Bypass',
+    '-File',
+    script,
+    '-SessionId',
+    sessionId,
+    '-Cwd',
+    cwd,
+    '-WaitSeconds',
+    String(stay ? 0 : WAIT_SECONDS),
+  ]
+
+  if (isModelFlag(model) && model !== startModel) {
+    argv.push('-Model', model)
+  }
+
+  const run = await $.process.run(argv)
+  const result = parseLaunch(run.stdout, run.stderr)
+
+  if (!result.ok) {
+    return { ok: false, text: `/relaunch could not open the new tab: ${result.error}` }
+  }
+
+  const record: PendingRecord = {
+    id: sessionId,
+    at: await $.clock.now(),
+    note,
+    ttlMs: stay ? PENDING_STAY_TTL_MS : PENDING_TTL_MS,
+  }
+
+  await $.store.set(`${PENDING_PREFIX}${sessionId}`, record)
+
+  return { ok: true, opened: `Opened a new tab (${result.title}) running: ${commandLine(result.exe, result.args)}` }
+}
+
+/**
+ * Compacts, then relaunches, once /relaunch has answered: the host refuses
+ * `$.session.compact` from inside a `command.run` hook (it would compact under
+ * the turn the hook holds). Progress goes to the transcript as `ui.log` lines.
+ *
+ * @param $ the engine interface
+ * @param note the note for the new session's prompt box, possibly empty
+ * @param startModel the model the session started on
+ */
+async function compactThenRelaunch($: EngineInterface, note: string, startModel: string | undefined) {
+  try {
+    const { skip } = await $.session.compact()
+
+    if (skip) {
+      $.ui.log('Compaction was vetoed by a hook, so nothing was relaunched.')
+
+      return
+    }
+
+    const launched = await launch($, false, note, startModel)
+
+    if (!launched.ok) {
+      $.ui.log(launched.text)
+
+      return
+    }
+
+    $.ui.log(`${launched.opened}\nExiting this session...`)
+    exitSoon($, launched.opened)
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error)
+
+    $.ui.log(`/relaunch compact failed (${reason}). Run /compact, then /relaunch now.`)
+  }
+}
+
 /**
  * Shows the welcome-back toast and puts the note in the prompt box, retrying
  * while the REPL is still mounting or a dialog holds the keys.
@@ -203,65 +293,19 @@ export function register(on: On) {
     }
 
     if (mode === 'compact') {
-      let skip: unknown
+      $.clock.after(EXIT_DELAY_MS, () => void compactThenRelaunch($, parsed.note, startModel))
 
-      // Compacting rejects while a turn runs; whether a command hook counts
-      // as one is unverified, so a refusal says what to do instead.
-      try {
-        ;({ skip } = await $.session.compact())
-      } catch (error) {
-        const reason = error instanceof Error ? error.message : String(error)
-
-        return { text: `Could not compact from /relaunch (${reason}). Run /compact, then /relaunch now.` }
-      }
-
-      if (skip) {
-        return { text: 'Compaction was vetoed by a hook, so nothing was relaunched.' }
-      }
+      return { text: 'Compacting, then relaunching in a new tab...' }
     }
 
     const stay = mode === 'stay'
-    const sessionId = await $.session.id()
-    const cwd = await $.session.cwd()
-    const model = await $.session.model()
-    const script = `${$.plugin.root}\\hooks\\relaunch.ps1`
+    const launched = await launch($, stay, parsed.note, startModel)
 
-    const argv = [
-      'powershell.exe',
-      '-NoProfile',
-      '-ExecutionPolicy',
-      'Bypass',
-      '-File',
-      script,
-      '-SessionId',
-      sessionId,
-      '-Cwd',
-      cwd,
-      '-WaitSeconds',
-      String(stay ? 0 : WAIT_SECONDS),
-    ]
-
-    if (isModelFlag(model) && model !== startModel) {
-      argv.push('-Model', model)
+    if (!launched.ok) {
+      return { text: launched.text }
     }
 
-    const run = await $.process.run(argv)
-    const launch = parseLaunch(run.stdout, run.stderr)
-
-    if (!launch.ok) {
-      return { text: `/relaunch could not open the new tab: ${launch.error}` }
-    }
-
-    const record: PendingRecord = {
-      id: sessionId,
-      at: await $.clock.now(),
-      note: parsed.note,
-      ttlMs: stay ? PENDING_STAY_TTL_MS : PENDING_TTL_MS,
-    }
-
-    await $.store.set(`${PENDING_PREFIX}${sessionId}`, record)
-
-    const opened = `Opened a new tab (${launch.title}) running: ${commandLine(launch.exe, launch.args)}`
+    const opened = launched.opened
 
     if (stay) {
       return { text: `${opened}\nIt starts once you /exit here, however long that takes.` }
