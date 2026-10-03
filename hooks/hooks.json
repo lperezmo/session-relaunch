@@ -1,0 +1,4 @@
+{
+  "description": "/relaunch reopens this session in a new terminal tab via --resume <id>, waiting for this process to exit first, so newly added MCP servers load",
+  "modules": ["./register.ts"]
+}

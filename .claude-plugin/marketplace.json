@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "session-relaunch",
+  "owner": {
+    "name": "Luis Perez Morales",
+    "url": "https://github.com/lperezmo"
+  },
+  "metadata": {
+    "description": "session-relaunch: a Claude Code mod that restarts the current session in a new terminal tab so newly added MCP servers load."
+  },
+  "plugins": [
+    {
+      "name": "session-relaunch",
+      "source": "./",
+      "description": "/relaunch reopens this exact session (claude --resume <id>, same flags) in a new terminal tab and exits the old one, so MCP servers added mid-session load.",
+      "category": "productivity"
+    }
+  ]
+}

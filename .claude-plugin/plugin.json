@@ -1,0 +1,9 @@
+{
+  "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
+  "name": "session-relaunch",
+  "version": "0.1.0",
+  "description": "/relaunch restarts this Claude Code session in a new terminal tab with --resume <id>, so MCP servers added since it started are loaded.",
+  "author": {
+    "name": "Luis Perez Morales"
+  }
+}

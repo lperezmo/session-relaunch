@@ -1,0 +1,7 @@
+# Claude Code writes the type declarations for the running build here each
+# time it loads the mod (2.1.287+). They are Anthropic's (all rights reserved)
+# and the MCP ones list this machine's tools, so they stay out of the repo.
+.claude-plugin/types/
+.claude/types/
+.claude/settings.local.json
+node_modules/
