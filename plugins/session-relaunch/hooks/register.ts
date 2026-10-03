@@ -101,7 +101,9 @@ type Launched = { ok: true; opened: string } | { ok: false; text: string }
  */
 async function launch($: EngineInterface, stay: boolean, note: string, startModel: string | undefined): Promise<Launched> {
   const sessionId = await $.session.id()
-  const cwd = await $.session.cwd()
+  // The project root, not the current directory: a shell `cd` during the
+  // session moves the latter, and the new tab should open where it started.
+  const cwd = await $.session.root()
   const model = await $.session.model()
   const root = $.plugin.root
   const wait = String(stay ? 0 : WAIT_SECONDS)
