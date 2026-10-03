@@ -36,12 +36,12 @@ jobs:
 
       - name: ShellCheck
         if: runner.os == 'Linux'
-        run: shellcheck -S error hooks/relaunch.sh tests/sh/relaunch_sh_test.sh
+        run: shellcheck -S error hooks/relaunch.sh .github/relaunch-sh/relaunch_sh_test.sh
 
       # tmux and xterm tabs open for real; Xvfb gives xterm a display.
       - name: Test
         if: runner.os == 'Linux'
-        run: xvfb-run -a bash tests/sh/relaunch_sh_test.sh
+        run: xvfb-run -a bash .github/relaunch-sh/relaunch_sh_test.sh
 
       # /bin/bash is 3.2 here, the one macOS users have. It runs the test,
       # relaunch.sh and the tab script, and argv comes from KERN_PROCARGS2.
@@ -49,7 +49,7 @@ jobs:
         if: runner.os == 'macOS'
         env:
           RELAUNCH_BASH: /bin/bash
-        run: /bin/bash tests/sh/relaunch_sh_test.sh
+        run: /bin/bash .github/relaunch-sh/relaunch_sh_test.sh
 
       # Terminal.app is driven by osascript, which needs the Automation
       # permission. The image grants osascript that for Finder, not Terminal,
@@ -67,7 +67,7 @@ jobs:
           db="$HOME/Library/Application Support/com.apple.TCC/TCC.db"
           sqlite3 "$db" "INSERT OR REPLACE INTO access VALUES('kTCCServiceAppleEvents','/usr/bin/osascript',1,2,0,1,NULL,NULL,0,'com.apple.Terminal',NULL,NULL,$now,NULL,NULL,'UNUSED',$now);" \
             || echo "could not write the TCC database"
-          /bin/bash tests/sh/relaunch_sh_test.sh
+          /bin/bash .github/relaunch-sh/relaunch_sh_test.sh
 
   bun-test:
     name: bun test

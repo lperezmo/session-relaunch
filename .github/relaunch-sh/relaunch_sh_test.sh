@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Tests hooks/relaunch.sh, the macOS/Linux launcher, without a real claude.
 #
-# A fake claude (tests/sh/fake_claude.c, compiled here) is started with
+# A fake claude (.github/relaunch-sh/fake_claude.c, compiled here) is started with
 # flags and runs relaunch.sh as its child, the way the mod does, so ancestor
 # detection and flag handling run for real. When something opens a tab and
 # runs `claude --resume ...`, the fake writes the argv it got, its cwd and

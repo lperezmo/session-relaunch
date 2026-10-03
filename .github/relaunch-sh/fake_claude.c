@@ -1,5 +1,5 @@
 /*
- * A stand-in for the claude binary, for tests/sh/relaunch_sh_test.sh.
+ * A stand-in for the claude binary, for .github/relaunch-sh/relaunch_sh_test.sh.
  *
  * Built as $FAKE_DIR/bin/claude so its argv[0] basename is `claude`, the way
  * relaunch.sh spots the real one. Two roles, picked by argv[1]:

@@ -65,10 +65,13 @@ sq() {
 
 # Like sq, but leaves words that need no quoting bare, for display.
 sq_display() {
-    case $1 in
-        '' | *[![:alnum:]_@%+=:,./-]*) sq "$1" ;;
-        *) Q=$1 ;;
-    esac
+    local bare='^[-[:alnum:]_@%+=:,/.]+$'
+
+    if [[ $1 =~ $bare ]]; then
+        Q=$1
+    else
+        sq "$1"
+    fi
 }
 
 SESSION_ID=''
