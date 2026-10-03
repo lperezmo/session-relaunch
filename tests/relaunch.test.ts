@@ -19,7 +19,7 @@ describe('parseArgs', () => {
   })
 
   test('everything after the keyword is the note, case kept', () => {
-    expect(parseArgs('now  check the GitHub tools')).toEqual({ mode: 'now', note: 'check the Hess SQL tools' })
+    expect(parseArgs('now  check the GitHub tools')).toEqual({ mode: 'now', note: 'check the GitHub tools' })
     expect(parseArgs('compact stay')).toEqual({ mode: 'compact', note: 'stay' })
   })
 
