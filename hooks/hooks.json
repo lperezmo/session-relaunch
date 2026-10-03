@@ -1,4 +1,4 @@
 {
-  "description": "/relaunch reopens this session in a new terminal tab via --resume <id>, waiting for this process to exit first, so newly added MCP servers load",
+  "description": "/relaunch reopens this session in a new terminal tab via --resume <id>, waiting for this process to exit first, so newly added MCP servers load; also flags MCP config changes",
   "modules": ["./register.ts"]
 }
