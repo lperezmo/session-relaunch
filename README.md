@@ -32,23 +32,12 @@ prompt is part of the command line and gets sent again on relaunch.
 
 ## What it does on your machine
 
-- **Runs a command:** `/exit`, right after it opens the new tab, so the old
-  session closes and the new one takes over. With `compact` it also compacts
-  the session first, the same as `/compact <note>`.
-- **Starts programs:** `powershell.exe` running the bundled
-  `hooks/relaunch.ps1` with this session's id, folder, a wait time and (if you
-  switched with `/model`) the model. That script reads the parent `claude`
-  process's command line to reuse its flags, then opens a Windows Terminal tab
-  (`wt.exe`, or a plain PowerShell window) that waits for the old session to
-  exit and runs `claude --resume <id>` with those flags.
-- **Reads:** the session id, working folder and model, your note, and the
-  command line of tool calls that look like MCP config changes
-  (`claude mcp add/remove`, edits to `.mcp.json`).
-- **Stores:** the session id and note in the plugin's local store for up to 12
-  hours, so the new session can show "Resumed via /relaunch" and fill in the
-  note. It is deleted once read.
-- **Sends:** nothing. There are no network calls; everything stays on your
-  machine.
+- **Commands it runs:** `/exit` after opening the new tab (and `/compact` with `compact`).
+- **Programs it starts:** `powershell.exe` with `hooks/relaunch.ps1`, which opens a
+  Windows Terminal tab running `claude --resume <session id>` with your original flags.
+- **What it reads:** the session id, folder, model, your note, and tool calls that change MCP config.
+- **What it stores:** the session id and note, locally, until the new session reads them.
+- **What it sends:** nothing. No network calls.
 
 ## License
 
