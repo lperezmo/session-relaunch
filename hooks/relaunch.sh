@@ -166,11 +166,11 @@ parent_of() {
     PARENT=''
 
     if [ "$USE_PROC" = 1 ]; then
-        local key value
+        local field value
         [ -r "/proc/$1/status" ] || return
 
-        while read -r key value; do
-            if [ "$key" = 'PPid:' ]; then
+        while read -r field value; do
+            if [ "$field" = 'PPid:' ]; then
                 PARENT=$value
                 break
             fi
@@ -285,11 +285,11 @@ find_claude() {
 # pick a session (and --model when MODEL replaces it).
 keep_args() {
     KEPT=()
-    local i=$((SCRIPT_INDEX + 1)) n=${#ARGV[@]} token name
+    local i=$((SCRIPT_INDEX + 1)) n=${#ARGV[@]} word name
 
     while [ "$i" -lt "$n" ]; do
-        token=${ARGV[$i]}
-        name=${token%%=*}
+        word=${ARGV[$i]}
+        name=${word%%=*}
 
         case $name in
             -c | --continue | --fork-session | -p | --print)
@@ -297,7 +297,7 @@ keep_args() {
                 continue
                 ;;
             -r | --resume | --session-id | --from-pr)
-                if [[ $token != *=* ]] && [ $((i + 1)) -lt "$n" ] && [[ ${ARGV[i + 1]} != -* ]]; then
+                if [[ $word != *=* ]] && [ $((i + 1)) -lt "$n" ] && [[ ${ARGV[i + 1]} != -* ]]; then
                     i=$((i + 1))
                 fi
                 i=$((i + 1))
@@ -306,14 +306,14 @@ keep_args() {
         esac
 
         if [ -n "$MODEL" ] && [ "$name" = --model ]; then
-            if [[ $token != *=* ]] && [ $((i + 1)) -lt "$n" ]; then
+            if [[ $word != *=* ]] && [ $((i + 1)) -lt "$n" ]; then
                 i=$((i + 1))
             fi
             i=$((i + 1))
             continue
         fi
 
-        KEPT+=("$token")
+        KEPT+=("$word")
         i=$((i + 1))
     done
 
