@@ -36,6 +36,7 @@ prompt is part of the command line and gets sent again on relaunch.
 - **Programs it starts:** `powershell.exe` with `hooks/relaunch.ps1`, which opens a
   Windows Terminal tab running `claude --resume <session id>` with your original flags.
 - **What it reads:** the session id, folder, model, your note, and tool calls that change MCP config.
+  No credentials.
 - **What it stores:** the session id and note, locally, until the new session reads them.
 - **What it sends:** nothing. No network calls.
 
