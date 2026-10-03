@@ -679,7 +679,8 @@ e2e_resume() {
         fail "resumed in $(cat "$D/resumed.cwd"), want $work"
     fi
     if [ "$kind" = "tmux" ]; then
-        if ! tmux -L "$TMUX_NAME" list-windows -F '#{window_name}' | grep -qxF "$title"; then
+        # tmux 3.4 lists a $ in a window name as \$, so compare without backslashes.
+        if ! tmux -L "$TMUX_NAME" list-windows -F '#{window_name}' | tr -d '\\' | grep -qxF "$title"; then
             fail "no tmux window named '$title': $(tmux -L "$TMUX_NAME" list-windows -F '#{window_name}' | tr '\n' '|')"
         fi
     fi
