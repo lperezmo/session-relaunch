@@ -30,7 +30,9 @@ Or try it from a clone with `claude --plugin-dir ./session-relaunch`.
 Only the first word can be a keyword, so a typo like `/relaunch stya` becomes a
 note and opens the dialog instead of relaunching on the spot. The note is typed
 into the new session's prompt box, and the new session shows a
-"Resumed via /relaunch" toast.
+"Resumed via /relaunch" toast. With `compact`, the note is also handed to the
+compaction as its instructions, the same as `/compact <note>`, so the summary
+keeps what it names.
 
 When a tool call changes the MCP configuration (`claude mcp add`, `remove`,
 `add-json`, or an edit to a `.mcp.json`), the mod prints one line suggesting

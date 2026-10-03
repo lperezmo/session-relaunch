@@ -39,7 +39,7 @@ export const USAGE = [
   'Usage: /relaunch [now|compact|stay] [note...]',
   '  /relaunch                 ask: relaunch now, compact first, or open the tab and stay',
   '  /relaunch now [note]      reopen this session in a new tab and exit this one',
-  '  /relaunch compact [note]  compact first, then relaunch',
+  '  /relaunch compact [note]  compact first (the note also steers the summary), then relaunch',
   '  /relaunch stay [note]     open the new tab but leave this session running (it starts once you /exit)',
   '  /relaunch <note>          text without a keyword is a note; it still asks first',
   'The note is put in the new session\'s prompt box. /relaunch help shows this.',
@@ -144,14 +144,15 @@ async function launch($: EngineInterface, stay: boolean, note: string, startMode
  * Compacts, then relaunches, once /relaunch has answered: the host refuses
  * `$.session.compact` from inside a `command.run` hook (it would compact under
  * the turn the hook holds). Progress goes to the transcript as `ui.log` lines.
+ * The note doubles as the compaction instructions, like `/compact <text>`.
  *
  * @param $ the engine interface
- * @param note the note for the new session's prompt box, possibly empty
+ * @param note the summary instructions and the new prompt box text, possibly empty
  * @param startModel the model the session started on
  */
 async function compactThenRelaunch($: EngineInterface, note: string, startModel: string | undefined) {
   try {
-    const { skip } = await $.session.compact()
+    const { skip } = await $.session.compact(note ? { instructions: note } : undefined)
 
     if (skip) {
       $.ui.log('Compaction was vetoed by a hook, so nothing was relaunched.')
