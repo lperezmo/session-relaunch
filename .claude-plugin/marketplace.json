@@ -11,7 +11,7 @@
   "plugins": [
     {
       "name": "session-relaunch",
-      "source": "./",
+      "source": "./plugins/session-relaunch",
       "description": "/relaunch reopens this exact session (claude --resume <id>, same flags) in a new terminal tab and exits the old one, so MCP servers added mid-session load.",
       "category": "productivity"
     }

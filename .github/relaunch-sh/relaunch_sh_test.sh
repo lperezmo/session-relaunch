@@ -17,7 +17,7 @@
 #   RELAUNCH_BASH  the bash that runs relaunch.sh and the tab script
 #                  (default: bash). An absolute path is also put first on
 #                  PATH as `bash`, so a tab that runs `bash FILE` gets it too.
-#   RELAUNCH_SH    the script under test (default: hooks/relaunch.sh)
+#   RELAUNCH_SH    the script under test (default: plugins/session-relaunch/hooks/relaunch.sh)
 #   ONLY=name      run just that case
 #   RELAUNCH_TEST_TERMINAL_APP=1  also drive Terminal.app (macOS; needs the
 #                  Automation permission for osascript)
@@ -29,7 +29,7 @@ set -u
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/../.." && pwd)
-SCRIPT="${RELAUNCH_SH:-$REPO/hooks/relaunch.sh}"
+SCRIPT="${RELAUNCH_SH:-$REPO/plugins/session-relaunch/hooks/relaunch.sh}"
 RELAUNCH_BASH="${RELAUNCH_BASH:-bash}"
 SID="0123abcd-ef45-6789-abcd-ef0123456789"
 SHORT="0123abcd"

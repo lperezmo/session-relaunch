@@ -36,7 +36,7 @@ jobs:
 
       - name: ShellCheck
         if: runner.os == 'Linux'
-        run: shellcheck -S error hooks/relaunch.sh .github/relaunch-sh/relaunch_sh_test.sh
+        run: shellcheck -S error plugins/session-relaunch/hooks/relaunch.sh .github/relaunch-sh/relaunch_sh_test.sh
 
       # tmux and xterm tabs open for real; Xvfb gives xterm a display.
       - name: Test
