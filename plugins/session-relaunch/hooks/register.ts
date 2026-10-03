@@ -25,6 +25,7 @@ import {
   commandLine,
   isFresh,
   isModelFlag,
+  isWaiting,
   isWindowsPath,
   parseArgs,
   parseLaunch,
@@ -60,15 +61,26 @@ const CANCEL = 'Cancel'
 const WAIT_SECONDS = 120
 
 /**
+ * How long relaunch.ps1/relaunch.sh may take to open the tab: long enough to
+ * answer a macOS Automation prompt for Terminal.app or iTerm.
+ */
+const LAUNCH_TIMEOUT_MS = 120_000
+
+const ALREADY_WAITING = 'A tab from an earlier /relaunch is still waiting on this session. Type /exit here and it takes over.'
+
+/**
  * `$.command.run` from inside a `command.run` hook is refused (it would wait
  * on the turn the hook holds), so `/exit` runs from a timer just after
  * /relaunch has answered.
  */
 const EXIT_DELAY_MS = 300
 
-/** The welcome waits for the REPL to mount: first try, retries, spacing. */
+/**
+ * The welcome waits for the REPL to mount, or for a startup dialog such as a
+ * new .mcp.json server's approval: first try, retries (about a minute), spacing.
+ */
 const WELCOME_DELAY_MS = 1000
-const WELCOME_RETRIES = 10
+const WELCOME_RETRIES = 120
 const WELCOME_RETRY_MS = 500
 
 /**
@@ -117,7 +129,7 @@ async function launch($: EngineInterface, stay: boolean, note: string, startMode
     argv.push(windows ? '-Model' : '--model', model)
   }
 
-  const run = await $.process.run(argv)
+  const run = await $.process.run(argv, { timeoutMs: LAUNCH_TIMEOUT_MS })
   const result = parseLaunch(run.stdout, run.stderr)
 
   if (!result.ok) {
@@ -129,11 +141,26 @@ async function launch($: EngineInterface, stay: boolean, note: string, startMode
     at: await $.clock.now(),
     note,
     ttlMs: stay ? PENDING_STAY_TTL_MS : PENDING_TTL_MS,
+    waitMs: stay ? 0 : WAIT_SECONDS * 1000,
   }
 
   await $.store.set(`${PENDING_PREFIX}${sessionId}`, record)
 
-  return { ok: true, opened: `Opened a new tab (${result.title}) running: ${commandLine(result.exe, result.args)}` }
+  const dropped = result.dropped_flags ? ' (its original flags could not be read, so it starts without them)' : ''
+
+  return { ok: true, opened: `Opened a new tab (${result.title}) running: ${commandLine(result.exe, result.args)}${dropped}` }
+}
+
+/**
+ * Whether a tab from an earlier /relaunch may still be waiting on this
+ * session; a second one would leave two tabs resuming the same id.
+ *
+ * @param $ the engine interface
+ */
+async function tabWaiting($: EngineInterface): Promise<boolean> {
+  const sessionId = await $.session.id()
+
+  return isWaiting(asPending(await $.store.get(`${PENDING_PREFIX}${sessionId}`)), await $.clock.now())
 }
 
 /**
@@ -193,6 +220,10 @@ async function welcome($: EngineInterface, note: string, attempt: number) {
       $.clock.after(WELCOME_RETRY_MS, () => void welcome($, note, attempt + 1))
 
       return
+    }
+
+    if (!ready && note) {
+      $.ui.log(`Your /relaunch note (it could not go in the prompt box): ${note}`)
     }
 
     $.ui.toast('Resumed via /relaunch')
@@ -289,6 +320,10 @@ export function register(on: On) {
       }
 
       mode = picked
+    }
+
+    if (await tabWaiting($)) {
+      return { text: ALREADY_WAITING }
     }
 
     if (mode === 'compact') {

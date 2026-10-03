@@ -336,6 +336,7 @@ case_dry_run_basic() {
     expect_dry_run "$D/proj"
     check args "$D/out" --resume "$SID" --dangerously-skip-permissions --add-dir /opt/x --model sonnet
     check absent "$D/out" lossy_args
+    check absent "$D/out" dropped_flags
 }
 
 case_drops_session_flags() {
@@ -351,6 +352,16 @@ case_session_flag_value_is_a_flag() {
     need_cc || return
     set_relaunch --session-id "$SID" --cwd "$D" --wait-seconds 120 --dry-run
     fake -r --verbose --from-pr --debug --resume
+    expect_dry_run "$D"
+    check args "$D/out" --resume "$SID" --verbose --debug
+}
+
+# Resuming reopens the session's worktree; sending these again would make
+# another one.
+case_drops_worktree_flags() {
+    need_cc || return
+    set_relaunch --session-id "$SID" --cwd "$D" --wait-seconds 120 --dry-run
+    fake --verbose -w feat --tmux --worktree --debug --worktree=other --tmux=classic -w
     expect_dry_run "$D"
     check args "$D/out" --resume "$SID" --verbose --debug
 }
@@ -380,6 +391,7 @@ case_special_chars_kept() {
     expect_dry_run "$D"
     check args "$D/out" --resume "$SID" --append-system-prompt "$SPECIAL" --add-dir "/tmp/a b"
     check absent "$D/out" lossy_args
+    check absent "$D/out" dropped_flags
 }
 
 case_empty_arg_kept() {
@@ -507,6 +519,48 @@ case_node_cli_without_claude_on_path() {
     esac
 }
 
+# The old claude rewrote its title, so argv is "claude" plus NUL padding and
+# its flags are gone: none may be carried, only --resume and the new --model,
+# and the JSON must say so.
+case_title_padded() {
+    need_cc || return
+    set_relaunch --session-id "$SID" --cwd "$D" --wait-seconds 120 --model sonnet --dry-run
+    FAKE_TITLE=pad fake --verbose --add-dir "/tmp/a b" --model haiku
+    expect_dry_run "$D"
+    check args "$D/out" --resume "$SID" --model sonnet
+    check eq "$D/out" dropped_flags true
+    check absent "$D/out" lossy_args
+}
+
+# argv reads as just "claude" (no padding) but the process is node: the
+# flags are gone too, and the new tab must not run bare node.
+case_title_exact_node() {
+    local exe
+    need_cc || return
+    if [ ! -r "/proc/$$/cmdline" ]; then
+        skip "needs /proc"
+        return
+    fi
+    mkdir -p "$D/bin" "$D/lib/claude-code"
+    cp "$T/bin/claude" "$D/bin/node"
+    : > "$D/lib/claude-code/cli.js"
+    case "$RELAUNCH_BASH" in
+        /*) ln -s "$RELAUNCH_BASH" "$D/bin/bash" ;;
+    esac
+    set_relaunch --session-id "$SID" --cwd "$D" --wait-seconds 120 --dry-run
+    PATH="$D/bin:$(path_without_claude)" FAKE_TITLE=exact FAKE_DIR="$D" "$D/bin/node" "$D/lib/claude-code/cli.js" \
+        --verbose --add-dir "/tmp/a b" > "$D/out" 2> "$D/err"
+    RC=$?
+    expect_ok_exit
+    check eq "$D/out" ok true || return
+    check args "$D/out" --resume "$SID"
+    check eq "$D/out" dropped_flags true
+    exe=$(python3 "$T/check.py" get "$D/out" exe)
+    case "$exe" in
+        *node) fail "exe: want claude, not the node binary, got $exe" ;;
+    esac
+}
+
 # PATH minus $T/bin and any directory that holds a claude.
 path_without_claude() {
     local out="" dir
@@ -566,14 +620,16 @@ start_tmux() {
 # The full flow through terminal $1: the old claude runs relaunch.sh, stays a
 # moment, exits; the new tab must then resume with the same flags. $2 is the
 # fake claude to use (default $T/bin/claude); its directory goes first on PATH.
+# $3 is the folder to resume in (default "$D/my proj").
 e2e_resume() {
-    local kind=$1 claude=${2:-$T/bin/claude} work lpid i=0
-    work="$D/my proj"
+    local kind=$1 claude=${2:-$T/bin/claude} work lpid i=0 title
+    work=${3:-"$D/my proj"}
+    title="${work##*/} $SHORT"
     mkdir -p "$work"
     set_relaunch --session-id "$SID" --cwd "$work" --wait-seconds 30
 
     if [ "$kind" = "tmux" ]; then
-        start_tmux "$kind" || { fail "could not start tmux"; return; }
+        start_tmux "${D##*/}" || { fail "could not start tmux"; return; }
         TMUX="$TMUX_VALUE" FAKE_DIR="$D" FAKE_LINGER_MS=2000 "$claude" \
             --verbose --add-dir "/tmp/a b" --append-system-prompt "$SPECIAL" --resume old-id \
             > "$D/out" 2> "$D/err" &
@@ -604,7 +660,7 @@ e2e_resume() {
     check eq "$D/out" ok true || return
     check eq "$D/out" terminal "\"$kind\""
     check eq "$D/out" pid "$lpid"
-    check eq "$D/out" title "\"my proj $SHORT\""
+    check eq "$D/out" title "$(json_quote "$title")"
 
     if ! wait_for "$D/resumed.argv" 30; then
         fail "no claude --resume ran within 30 seconds of the old one exiting"
@@ -623,10 +679,15 @@ e2e_resume() {
         fail "resumed in $(cat "$D/resumed.cwd"), want $work"
     fi
     if [ "$kind" = "tmux" ]; then
-        if ! tmux -L "$TMUX_NAME" list-windows -F '#{window_name}' | grep -qx "my proj $SHORT"; then
-            fail "no tmux window named 'my proj $SHORT': $(tmux -L "$TMUX_NAME" list-windows -F '#{window_name}' | tr '\n' '|')"
+        if ! tmux -L "$TMUX_NAME" list-windows -F '#{window_name}' | grep -qxF "$title"; then
+            fail "no tmux window named '$title': $(tmux -L "$TMUX_NAME" list-windows -F '#{window_name}' | tr '\n' '|')"
         fi
     fi
+}
+
+# Prints S as a JSON string literal.
+json_quote() {
+    python3 -c 'import json, sys; sys.stdout.write(json.dumps(sys.argv[1]))' "$1"
 }
 
 case_tmux_resume() {
@@ -636,6 +697,22 @@ case_tmux_resume() {
         return
     fi
     e2e_resume tmux
+}
+
+# tmux expands #(command) and #{format} in new-window's -c and -n: a folder
+# named like that must run nothing, and the window must show its literal name.
+# The tmux server has FAKE_DIR=$D, so an expansion would create $D.pwned.
+case_tmux_format_in_cwd() {
+    need_cc || return
+    if ! command -v tmux >/dev/null 2>&1; then
+        skip "no tmux"
+        return
+    fi
+    e2e_resume tmux "$T/bin/claude" "$D/a #(touch \${FAKE_DIR}.pwned) #{host}"
+    sleep 1
+    if [ -e "$D.pwned" ]; then
+        fail "tmux ran the #(...) in the folder name"
+    fi
 }
 
 # The old session outlives --wait-seconds: the tab must not resume over it.
@@ -679,6 +756,87 @@ case_x_terminal_emulator_resume() {
     e2e_x x-terminal-emulator
 }
 
+# fake_terminal NAME fail|run: a stand-in terminal in $D/bin that logs its
+# name to $D/tried, then dies at once with status 1 (a stale DISPLAY), or
+# runs what follows its -e and stays up while that runs.
+fake_terminal() {
+    mkdir -p "$D/bin"
+    {
+        printf '%s\n' '#!/bin/sh' 'echo "${0##*/}" >> "$FAKE_DIR/tried"'
+        if [ "$2" = "fail" ]; then
+            printf '%s\n' 'exit 1'
+        else
+            printf '%s\n' 'while [ $# -gt 0 ] && [ "$1" != -e ]; do shift; done' 'shift' 'exec "$@"'
+        fi
+    } > "$D/bin/$1"
+    chmod +x "$D/bin/$1"
+}
+
+# A detached terminal that dies at once is a failure: ok false, and the tab
+# script file removed. $1 runs the old claude (a full, not dry, run).
+expect_terminal_failure() {
+    mkdir -p "$D/tmp"
+    set_relaunch --session-id "$SID" --cwd "$D" --wait-seconds 30
+    "$@" > "$D/out" 2> "$D/err"
+    RC=$?
+    expect_ok_exit
+    check eq "$D/out" ok false || return
+    check contains "$D/out" error "tried: xterm"
+    if [ -n "$(ls -A "$D/tmp")" ]; then
+        fail "the tab script file was left behind: $(ls -A "$D/tmp" | tr '\n' ' ')"
+    fi
+}
+
+case_detached_terminal_dies() {
+    need_cc || return
+    fake_terminal xterm fail
+    expect_terminal_failure env PATH="$D/bin:$PATH" TMPDIR="$D/tmp" RELAUNCH_TERMINAL=xterm FAKE_DIR="$D" "$T/bin/claude" --verbose
+    if [ ! -e "$D/tried" ]; then
+        fail "the fake xterm never ran"
+    fi
+}
+
+# The real thing: xterm with a DISPLAY nothing serves.
+case_xterm_bad_display() {
+    need_cc || return
+    if ! command -v xterm >/dev/null 2>&1; then
+        skip "no xterm"
+        return
+    fi
+    expect_terminal_failure env DISPLAY=:987 TMPDIR="$D/tmp" RELAUNCH_TERMINAL=xterm FAKE_DIR="$D" "$T/bin/claude" --verbose
+}
+
+# Terminals that die at once are passed over for the next candidate; the one
+# that stays up opens the tab, which resumes.
+case_detached_falls_through() {
+    need_cc || return
+    if [ "$(uname -s)" = "Darwin" ]; then
+        skip "the X terminal candidates are not tried on macOS"
+        return
+    fi
+    fake_terminal x-terminal-emulator fail
+    fake_terminal gnome-terminal fail
+    fake_terminal konsole fail
+    fake_terminal xterm run
+    set_relaunch --session-id "$SID" --cwd "$D" --wait-seconds 30
+    env -u WAYLAND_DISPLAY -u WEZTERM_PANE -u KITTY_WINDOW_ID -u GNOME_TERMINAL_SCREEN -u GNOME_TERMINAL_SERVICE \
+        -u KONSOLE_VERSION -u GHOSTTY_RESOURCES_DIR -u ALACRITTY_WINDOW_ID \
+        DISPLAY=:987 PATH="$D/bin:$PATH" SHELL="$T/bin/exitshell" FAKE_DIR="$D" FAKE_LINGER_MS=1000 \
+        "$T/bin/claude" --verbose > "$D/out" 2> "$D/err"
+    RC=$?
+    expect_ok_exit
+    check eq "$D/out" ok true || return
+    check eq "$D/out" terminal '"xterm"'
+    if [ "$(tr '\n' ' ' < "$D/tried")" != "x-terminal-emulator gnome-terminal konsole xterm " ]; then
+        fail "tried: want x-terminal-emulator gnome-terminal konsole xterm, got $(tr '\n' ' ' < "$D/tried")"
+    fi
+    if ! wait_for "$D/resumed.argv" 20; then
+        fail "no claude --resume ran through the fake xterm"
+        return
+    fi
+    check nul "$D/resumed.argv" --resume "$SID" --verbose
+}
+
 # Opt-in (RELAUNCH_TEST_TERMINAL_APP=1): drives Terminal.app via osascript,
 # which needs the Automation permission. The new window does not inherit our
 # environment, so this fake claude has $D built in.
@@ -696,20 +854,23 @@ case_terminal_app_resume() {
     e2e_resume terminal-app "$D/bin/claude"
 }
 
-# macOS without python3: argv comes from ps, split on whitespace.
+# macOS without python3: argv comes from ps, split on whitespace, so no flag
+# is carried (a split "two words" could otherwise become a prompt).
 case_mac_ps_fallback() {
     if [ "$(uname -s)" != "Darwin" ]; then
         skip "macOS only"
         return
     fi
     need_cc || return
-    set_relaunch --session-id "$SID" --cwd "$D" --wait-seconds 120 --dry-run
-    PATH="$T/bin:/bin" FAKE_DIR="$D" "$T/bin/claude" --verbose --model haiku --resume old > "$D/out" 2> "$D/err"
+    set_relaunch --session-id "$SID" --cwd "$D" --wait-seconds 120 --model sonnet --dry-run
+    PATH="$T/bin:/bin" FAKE_DIR="$D" "$T/bin/claude" --verbose --append-system-prompt "two words" --model haiku --resume old \
+        > "$D/out" 2> "$D/err"
     RC=$?
     expect_ok_exit
     check eq "$D/out" ok true
     check eq "$D/out" lossy_args true
-    check args "$D/out" --resume "$SID" --verbose --model haiku
+    check eq "$D/out" dropped_flags true
+    check args "$D/out" --resume "$SID" --model sonnet
 }
 
 # --- run -------------------------------------------------------------------------
@@ -724,6 +885,7 @@ for name in \
     dry_run_basic \
     drops_session_flags \
     session_flag_value_is_a_flag \
+    drops_worktree_flags \
     model_replaced \
     model_kept_without_override \
     special_chars_kept \
@@ -735,12 +897,18 @@ for name in \
     missing_session_id \
     node_cli_detected \
     node_cli_without_claude_on_path \
+    title_padded \
+    title_exact_node \
     tab_script_runs \
     mac_ps_fallback \
     tmux_resume \
+    tmux_format_in_cwd \
     tmux_gives_up_while_old_runs \
     xterm_resume \
     x_terminal_emulator_resume \
+    detached_terminal_dies \
+    xterm_bad_display \
+    detached_falls_through \
     terminal_app_resume; do
     if [ -n "${ONLY:-}" ] && [ "$ONLY" != "$name" ]; then
         continue

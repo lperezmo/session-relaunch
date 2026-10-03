@@ -4,7 +4,7 @@
 # Run by the session-relaunch mod through $.process.run, so this process is a
 # descendant of the claude being replaced (claude.exe, or node.exe running the
 # npm CLI script). It finds that ancestor, reuses its command line minus the
-# session-picking flags, and hands the new tab a command that waits on the old
+# session-picking flags, and hands the new tab a script that waits on the old
 # PID before running `claude --resume <id>`, so two processes never write the
 # same transcript at once.
 #
@@ -26,8 +26,18 @@ $ErrorActionPreference = 'Stop'
 
 # Flags that pick which session to open. They are replaced by --resume <id>;
 # the ones with an optional value also drop that value when it is not a flag.
-$DropAlone = @('-c', '--continue', '--fork-session', '-p', '--print')
-$DropWithValue = @('-r', '--resume', '--session-id', '--from-pr')
+# The worktree flags go too: --resume already reopens the session's worktree,
+# and sending them again would create another one.
+$DropAlone = @('-c', '--continue', '--fork-session', '-p', '--print', '--tmux')
+$DropWithValue = @('-r', '--resume', '--session-id', '--from-pr', '-w', '--worktree')
+
+# Per-session variables the old claude set in its own environment. A new tab
+# can inherit them, and they would start the new CLI as a child session.
+$SessionEnvNames = @(
+    'CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_CHILD_SESSION', 'CLAUDE_CODE_SESSION_ID',
+    'CLAUDE_PID', 'CLAUDE_EFFORT', 'CLAUDE_CODE_MESSAGING_SOCKET', 'CLAUDE_CODE_MESSAGING_TOKEN',
+    'CLAUDE_CODE_BRIDGE_SESSION_ID', 'CLAUDE_CODE_SESSION_ATTENDED', 'CLAUDE_CODE_EXECPATH'
+)
 
 # Splits a command line the way the MSVC runtime builds argv, so
 # --flag="a b" and "--flag=a b" both come back as the one value --flag=a b.
@@ -164,8 +174,11 @@ function Get-KeptArgs($parts, [int]$scriptIndex, [string]$model) {
     return , $kept
 }
 
+# A single-quoted PowerShell literal. PowerShell also reads the curly quotes
+# U+2018 to U+201B as single quotes, so doubling only ' is not enough; the
+# parser's own escaper doubles every one of them.
 function Quote-Ps([string]$text) {
-    return "'" + $text.Replace("'", "''") + "'"
+    return "'" + [System.Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($text) + "'"
 }
 
 # One argv element as the MSVC runtime expects it on a command line.
@@ -180,41 +193,48 @@ function ConvertTo-CrtArg([string]$value) {
     return '"' + $escaped + '"'
 }
 
-# PowerShell 5.1 passes a value to a native exe in bare double quotes when it
-# has whitespace, without escaping inner quotes or a trailing backslash.
-# Escaping those first makes the exe see the original value. Still wrong for
-# whitespace that follows an odd number of quotes; 5.1 cannot express that.
-function ConvertTo-NativeArg([string]$value) {
-    if ($value -eq '') {
-        return '""'
-    }
-
-    $escaped = $value -replace '(\\*)"', '$1$1\"'
-
-    if ($value -match '\s') {
-        $escaped = $escaped -replace '(\\+)$', '$1$1'
-    }
-
-    return $escaped
-}
-
-# The script the new tab runs: wait for the old PID, then start the command.
+# The script the new tab runs: delete its own file, drop the old session's
+# variables, enter the folder, wait for the old PID, then start the command.
 # The command is resolved there, so `claude` is whatever PATH holds after an
-# auto-update; an exe gets 5.1-escaped values, a .ps1 shim the raw ones.
-function New-TabScript([int]$waitPid, [string]$command, [string[]]$arguments, [string]$title, [int]$waitSeconds) {
+# auto-update. An exe gets one command line built here, because 5.1 splits
+# values like {"a":["b c"]} when it passes them to a native exe itself; a
+# .ps1 shim gets the raw values.
+function New-TabScript([int]$waitPid, [string]$command, [string[]]$arguments, [string]$title, [int]$waitSeconds, [string]$location) {
     $raw = ($arguments | ForEach-Object { Quote-Ps $_ }) -join ', '
-    $native = ($arguments | ForEach-Object { Quote-Ps (ConvertTo-NativeArg $_) }) -join ', '
+    $crt = Quote-Ps (($arguments | ForEach-Object { ConvertTo-CrtArg $_ }) -join ' ')
     $manual = Quote-Ps ('  ' + ((@($command) + $arguments | ForEach-Object { ConvertTo-CrtArg $_ }) -join ' '))
+    $envPaths = ($SessionEnvNames | ForEach-Object { 'Env:' + $_ }) -join ', '
     $alive = "Get-Process -Id $waitPid -ErrorAction SilentlyContinue"
 
+    # -LiteralPath, so [ and ] in a folder name are not wildcards. Without the
+    # folder the resume would look in the wrong project, so stop instead.
+    $prelude = @"
+Remove-Item -LiteralPath `$PSCommandPath -Force -ErrorAction SilentlyContinue
+Remove-Item $envPaths -ErrorAction SilentlyContinue
+`$host.UI.RawUI.WindowTitle = $(Quote-Ps $title)
+try {
+    Set-Location -LiteralPath $(Quote-Ps $location) -ErrorAction Stop
+} catch {
+    Write-Host $(Quote-Ps "Could not open the folder $location")
+    return
+}
+"@
+
+    # UseShellExecute off keeps the child in this console; WorkingDirectory
+    # is needed because Set-Location does not move the process directory.
     $launch = @"
 `$cmd = Get-Command $(Quote-Ps $command) -CommandType Application, ExternalScript -ErrorAction SilentlyContinue | Select-Object -First 1
 if (-not `$cmd) {
     Write-Host $(Quote-Ps "Could not find $command. Run it yourself:")
     Write-Host $manual
 } elseif (`$cmd.CommandType -eq 'Application') {
-    `$argv = @($native)
-    & `$cmd @argv
+    `$psi = New-Object System.Diagnostics.ProcessStartInfo
+    `$psi.FileName = `$cmd.Path
+    `$psi.Arguments = $crt
+    `$psi.WorkingDirectory = (Get-Location).ProviderPath
+    `$psi.UseShellExecute = `$false
+    `$child = [System.Diagnostics.Process]::Start(`$psi)
+    `$child.WaitForExit()
 } else {
     `$argv = @($raw)
     & `$cmd @argv
@@ -223,7 +243,7 @@ if (-not `$cmd) {
 
     if ($waitSeconds -le 0) {
         return @"
-`$host.UI.RawUI.WindowTitle = $(Quote-Ps $title)
+$prelude
 Write-Host 'Waiting for the old session (PID $waitPid) to exit (no time limit)...'
 while ($alive) { Start-Sleep -Milliseconds 300 }
 $launch
@@ -231,7 +251,7 @@ $launch
     }
 
     return @"
-`$host.UI.RawUI.WindowTitle = $(Quote-Ps $title)
+$prelude
 `$deadline = (Get-Date).AddSeconds($waitSeconds)
 Write-Host 'Waiting up to $waitSeconds seconds for the old session (PID $waitPid) to exit...'
 while (($alive) -and (Get-Date) -lt `$deadline) { Start-Sleep -Milliseconds 300 }
@@ -244,25 +264,68 @@ $launch
 "@
 }
 
+# Saves the tab script to a new file in the user's temp folder, UTF-8 with a
+# BOM so Windows PowerShell 5.1 reads non-ASCII folder names correctly. A file
+# keeps the tab's command line short, where -EncodedCommand could pass the
+# 32767-character limit. The script deletes the file when it starts.
+function Write-TabScript([string]$script) {
+    $attempt = 0
+
+    while ($true) {
+        $tmp = [System.IO.Path]::GetTempFileName()
+        $file = [System.IO.Path]::ChangeExtension($tmp, '.ps1')
+
+        try {
+            [System.IO.File]::Move($tmp, $file)
+            break
+        } catch {
+            # A leftover .ps1 of the same name; try another.
+            [System.IO.File]::Delete($tmp)
+            $attempt++
+            if ($attempt -ge 5) { throw }
+        }
+    }
+
+    [System.IO.File]::WriteAllText($file, $script, (New-Object System.Text.UTF8Encoding $true))
+    return $file
+}
+
 # Opens the tab (or a console window outside Windows Terminal) running the
 # script. Returns the terminal kind.
 function Start-Tab([string]$script, [string]$dir, [string]$title, [bool]$keepOpen) {
-    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script))
-    $shell = '-NoLogo'
-    if ($keepOpen) { $shell += ' -NoExit' }
-    $shell += ' -ExecutionPolicy Bypass -EncodedCommand ' + $encoded
+    $file = Write-TabScript $script
 
-    if ($env:WT_SESSION) {
-        # -w 0 is the current Windows Terminal window. wt splits its own
-        # arguments on `;` unless escaped as `\;`; the base64 has none.
-        $wtDir = ConvertTo-CrtArg $dir.Replace(';', '\;')
-        $wtTitle = ConvertTo-CrtArg $title.Replace(';', '\;')
-        Start-Process -FilePath 'wt.exe' -ArgumentList "-w 0 new-tab -d $wtDir --title $wtTitle powershell.exe $shell"
-        return 'windows-terminal'
+    try {
+        # Bypass is process scoped and only lets this unsigned local file run.
+        $shell = '-NoLogo'
+        if ($keepOpen) { $shell += ' -NoExit' }
+        $shell += ' -ExecutionPolicy Bypass -File '
+
+        if ($env:WT_SESSION) {
+            # -w 0 is the current Windows Terminal window. wt splits its own
+            # arguments on `;` unless escaped as `\;`.
+            $wtDir = ConvertTo-CrtArg $dir.Replace(';', '\;')
+            $wtTitle = ConvertTo-CrtArg $title.Replace(';', '\;')
+            $wtFile = ConvertTo-CrtArg $file.Replace(';', '\;')
+            Start-Process -FilePath 'wt.exe' -ArgumentList "-w 0 new-tab -d $wtDir --title $wtTitle powershell.exe $shell$wtFile"
+            return 'windows-terminal'
+        }
+
+        # The script enters the folder itself; -WorkingDirectory would treat
+        # [ and ] in it as wildcards and fail.
+        Start-Process -FilePath 'powershell.exe' -ArgumentList ($shell + (ConvertTo-CrtArg $file))
+        return 'console'
+    } catch {
+        Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue
+        throw
     }
+}
 
-    Start-Process -FilePath 'powershell.exe' -ArgumentList $shell -WorkingDirectory $dir
-    return 'console'
+# One compact JSON line with every non-ASCII character as \uXXXX, so the
+# console code page cannot mangle folder names on the way to the mod.
+function ConvertTo-AsciiJson($value) {
+    $json = $value | ConvertTo-Json -Compress
+    return [regex]::Replace($json, '[^\x00-\x7F]', { param($m) '\u{0:x4}' -f [int][char]$m.Value })
 }
 
 try {
@@ -297,7 +360,7 @@ try {
     if (-not $leaf) { $leaf = $Cwd }
     $title = $leaf + ' ' + $SessionId.Substring(0, [Math]::Min(8, $SessionId.Length))
 
-    $script = New-TabScript $proc.ProcessId $exe $argList $title $WaitSeconds
+    $script = New-TabScript $proc.ProcessId $exe $argList $title $WaitSeconds $Cwd
 
     if ($DryRun) {
         $terminal = 'dry-run'
@@ -307,7 +370,7 @@ try {
 
     $report = [ordered]@{ ok = $true; pid = $proc.ProcessId; terminal = $terminal; exe = $exe; args = $argList; title = $title }
     if ($DryRun) { $report.dir = $dir; $report.script = $script }
-    [pscustomobject]$report | ConvertTo-Json -Compress
+    ConvertTo-AsciiJson ([pscustomobject]$report)
 } catch {
-    [pscustomobject]@{ ok = $false; error = $_.Exception.Message } | ConvertTo-Json -Compress
+    ConvertTo-AsciiJson ([pscustomobject]@{ ok = $false; error = $_.Exception.Message })
 }

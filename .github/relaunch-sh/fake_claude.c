@@ -13,6 +13,13 @@
  *                         (as the real one does until /exit), then exits.
  *
  * FAKE_DIR comes from the environment, else from -DFAKE_DIR_DEFAULT.
+ *
+ * FAKE_TITLE makes the old session rewrite its argv memory before running
+ * the command, the way a CLI that sets its process title does:
+ *   pad     "claude" and NUL padding over the whole argv area (node's
+ *           process.title, through libuv)
+ *   exact   "claude", a NUL, then filler up to a non-NUL last byte, so Linux
+ *           reports just "claude" (setproctitle style)
  */
 
 #include <errno.h>
@@ -94,7 +101,31 @@ static int resumed(const char *dir, int argc, char **argv) {
     return 0;
 }
 
-static int launcher(const char *dir) {
+static void set_title(int argc, char **argv, const char *mode) {
+    char *start = argv[0];
+    char *end = argv[0] + strlen(argv[0]) + 1;
+    size_t cap;
+    int i;
+
+    /* The contiguous argv strings, as the kernel exposes them. */
+    for (i = 1; i < argc && argv[i] == end; i++) {
+        end += strlen(argv[i]) + 1;
+    }
+    cap = (size_t)(end - start);
+    if (cap < 8) {
+        return;
+    }
+
+    if (strcmp(mode, "exact") == 0) {
+        memset(start, 'x', cap);
+        memcpy(start, "claude", 7);
+    } else {
+        memset(start, 0, cap);
+        memcpy(start, "claude", 6);
+    }
+}
+
+static int launcher(const char *dir, int argc, char **argv) {
     char pid_text[64];
     char *data = NULL;
     size_t len = 0;
@@ -106,6 +137,11 @@ static int launcher(const char *dir) {
     pid_t child;
     int status = 0;
     const char *linger = getenv("FAKE_LINGER_MS");
+    const char *title = getenv("FAKE_TITLE");
+
+    if (title && *title) {
+        set_title(argc, argv, title);
+    }
 
     snprintf(pid_text, sizeof pid_text, "%ld\n", (long)getpid());
     write_file(dir, "launcher.pid", pid_text, strlen(pid_text));
@@ -173,5 +209,5 @@ int main(int argc, char **argv) {
         return resumed(dir, argc, argv);
     }
 
-    return launcher(dir);
+    return launcher(dir, argc, argv);
 }

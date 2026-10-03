@@ -1,7 +1,7 @@
 import { describe, expect, test, tier } from 'claude-code/testing'
 
 import { mcpChange } from '../hooks/mcp-change'
-import { asPending, commandLine, isFresh, isModelFlag, isWindowsPath, parseArgs, parseLaunch } from '../hooks/parse'
+import { asPending, commandLine, isFresh, isModelFlag, isWaiting, isWindowsPath, parseArgs, parseLaunch } from '../hooks/parse'
 import { USAGE } from '../hooks/register'
 
 tier('user')
@@ -86,14 +86,26 @@ describe('isModelFlag', () => {
 
 describe('pending record', () => {
   test('asPending narrows and fills defaults', () => {
-    expect(asPending({ id: 'a', at: 5 })).toEqual({ id: 'a', at: 5, note: '', ttlMs: 600000 })
+    expect(asPending({ id: 'a', at: 5 })).toEqual({ id: 'a', at: 5, note: '', ttlMs: 600000, waitMs: 0 })
     expect(asPending({ id: 'a' })).toBeNull()
     expect(asPending('a')).toBeNull()
     expect(asPending(undefined)).toBeNull()
   })
 
+  test('isWaiting covers the wait window, or the whole life for stay', () => {
+    const now = { id: 'a', at: 1000, note: '', ttlMs: 600000, waitMs: 120000 }
+    const stay = { id: 'a', at: 1000, note: '', ttlMs: 43200000, waitMs: 0 }
+
+    expect(isWaiting(now, 1000)).toBe(true)
+    expect(isWaiting(now, 120999)).toBe(true)
+    expect(isWaiting(now, 121000)).toBe(false)
+    expect(isWaiting(stay, 43201000)).toBe(true)
+    expect(isWaiting(stay, 43201001)).toBe(false)
+    expect(isWaiting(null, 1000)).toBe(false)
+  })
+
   test('isFresh honours the time to live', () => {
-    const record = { id: 'a', at: 1000, note: '', ttlMs: 600000 }
+    const record = { id: 'a', at: 1000, note: '', ttlMs: 600000, waitMs: 120000 }
 
     expect(isFresh(record, 1000)).toBe(true)
     expect(isFresh(record, 601000)).toBe(true)

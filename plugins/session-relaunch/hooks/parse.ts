@@ -43,7 +43,7 @@ export function parseArgs(raw: string): RelaunchArgs {
 }
 
 export type LaunchResult =
-  | { ok: true; pid: number; terminal: string; exe: string; args: string[]; title: string }
+  | { ok: true; pid: number; terminal: string; exe: string; args: string[]; title: string; dropped_flags?: boolean }
   | { ok: false; error: string }
 
 /** The helper's one JSON line, or a failure naming what it printed instead. */
@@ -92,8 +92,11 @@ export function isModelFlag(model: string | undefined | null): model is string {
   return typeof model === 'string' && /^[A-Za-z0-9][\w.:/@-]*(\[1m\])?$/.test(model) && model.length <= 200
 }
 
-/** What /relaunch leaves in the store for the session it reopens. */
-export type PendingRecord = { id: string; at: number; note: string; ttlMs: number }
+/**
+ * What /relaunch leaves in the store for the session it reopens. `waitMs` is
+ * how long the new tab waits for this session to exit, 0 for no limit.
+ */
+export type PendingRecord = { id: string; at: number; note: string; ttlMs: number; waitMs: number }
 
 /** How long a record stays good after `/relaunch` and `/relaunch compact`. */
 export const PENDING_TTL_MS = 10 * 60 * 1000
@@ -121,10 +124,23 @@ export function asPending(value: unknown): PendingRecord | null {
     at: record.at,
     note: typeof record.note === 'string' ? record.note : '',
     ttlMs: typeof record.ttlMs === 'number' ? record.ttlMs : PENDING_TTL_MS,
+    waitMs: typeof record.waitMs === 'number' ? record.waitMs : 0,
   }
 }
 
 /** Whether a record is still within its time to live at `now`. */
 export function isFresh(record: PendingRecord, now: number): boolean {
   return now >= record.at && now - record.at <= record.ttlMs
+}
+
+/**
+ * Whether the tab an earlier /relaunch opened may still be waiting on this
+ * session at `now`, so a second one would leave two tabs resuming one id.
+ */
+export function isWaiting(record: PendingRecord | null, now: number): boolean {
+  if (!record || !isFresh(record, now)) {
+    return false
+  }
+
+  return record.waitMs === 0 || now - record.at < record.waitMs
 }

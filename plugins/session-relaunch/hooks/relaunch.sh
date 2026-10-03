@@ -13,8 +13,10 @@
 # Usage: relaunch.sh --session-id ID --cwd DIR --wait-seconds N [--model M] [--dry-run]
 #
 # Prints one JSON line and exits 0: { ok, pid, terminal, exe, args, title }
-# (plus dir, script and would_use with --dry-run, and lossy_args when argv had
-# to be split from ps output) or { ok: false, error }.
+# (plus dir, script and would_use with --dry-run, lossy_args when argv had to
+# be split from ps output, and dropped_flags when the original flags could not
+# be read faithfully and the new session starts without them) or
+# { ok: false, error }.
 #
 # Env read: RELAUNCH_CLAUDE_PID, RELAUNCH_TERMINAL, TERM_PROGRAM, and only whether TMUX, WEZTERM_PANE, KITTY_WINDOW_ID, DISPLAY, WAYLAND_DISPLAY, GNOME_TERMINAL_SCREEN, GNOME_TERMINAL_SERVICE, KONSOLE_VERSION, GHOSTTY_RESOURCES_DIR, ALACRITTY_WINDOW_ID are set (PATH only via `command -v`, SHELL only in the new tab); nothing else.
 #
@@ -182,10 +184,13 @@ parent_of() {
 }
 
 # Fills ARGV with the argv of PID. LOSSY=1 when it had to come from ps output
-# split on whitespace (macOS without a usable python3).
+# split on whitespace (macOS without a usable python3). PADDED=1 when trailing
+# empty strings were trimmed: what a process that rewrote its argv memory
+# leaves behind (node setting process.title zero-fills the rest of argv).
 read_argv() {
     ARGV=()
     LOSSY=0
+    PADDED=0
     local a='' last line
 
     if [ "$USE_PROC" = 1 ]; then
@@ -195,13 +200,6 @@ read_argv() {
             ARGV+=("$a")
             a=''
         done <"/proc/$1/cmdline"
-
-        # A process that rewrote its title leaves NUL padding behind.
-        while [ ${#ARGV[@]} -gt 0 ]; do
-            last=$((${#ARGV[@]} - 1))
-            [ -z "${ARGV[$last]}" ] || break
-            unset "ARGV[$last]"
-        done
     else
         find_mac_python
 
@@ -218,7 +216,55 @@ read_argv() {
         fi
     fi
 
+    # A process that rewrote its title leaves NUL padding behind.
+    while [ ${#ARGV[@]} -gt 0 ]; do
+        last=$((${#ARGV[@]} - 1))
+        [ -z "${ARGV[$last]}" ] || break
+        unset "ARGV[$last]"
+        PADDED=1
+    done
+
     [ ${#ARGV[@]} -gt 0 ]
+}
+
+# Sets EXE_BASE to the file name of the executable PID runs (from
+# /proc/PID/exe, else its comm), or to nothing.
+exe_base_of() {
+    local exe=''
+
+    if [ "$USE_PROC" = 1 ]; then
+        if command -v readlink >/dev/null 2>&1; then
+            exe=$(readlink "/proc/$1/exe" 2>/dev/null)
+        fi
+        if [ -z "$exe" ] && [ -r "/proc/$1/comm" ]; then
+            read -r exe <"/proc/$1/comm"
+        fi
+    else
+        exe=$(ps -o comm= -p "$1" 2>/dev/null)
+    fi
+
+    # An auto-update may have replaced the binary since it started.
+    exe=${exe% (deleted)}
+    EXE_BASE=${exe##*/}
+}
+
+# Whether claude's argv shows signs of a rewritten title, which overwrites
+# argv in place and loses every flag: NUL padding was trimmed, or argv is
+# just `claude` while the process is really node or bun.
+title_rewritten() {
+    [ "$PADDED" = 1 ] && return 0
+
+    if [ ${#ARGV[@]} -ne 1 ] || [ "${ARGV[0]##*/}" != claude ]; then
+        return 1
+    fi
+
+    exe_base_of "$CPID"
+
+    case $EXE_BASE in
+        node | nodejs | bun) return 0 ;;
+    esac
+
+    return 1
 }
 
 # Whether ARGV is claude: the native binary, or node/bun running the CLI
@@ -282,21 +328,26 @@ find_claude() {
 }
 
 # Fills KEPT with the claude flags after SCRIPT_INDEX, minus the ones that
-# pick a session (and --model when MODEL replaces it).
+# pick a session or would make a second worktree (resuming reopens the
+# session's own), and --model when MODEL replaces it. With DROPPED=1 none are
+# kept: argv could not be read faithfully, and a misread fragment could be
+# taken as a prompt and submitted.
 keep_args() {
     KEPT=()
     local i=$((SCRIPT_INDEX + 1)) n=${#ARGV[@]} word name
+
+    [ "$DROPPED" = 1 ] && i=$n
 
     while [ "$i" -lt "$n" ]; do
         word=${ARGV[$i]}
         name=${word%%=*}
 
         case $name in
-            -c | --continue | --fork-session | -p | --print)
+            -c | --continue | --fork-session | -p | --print | --tmux)
                 i=$((i + 1))
                 continue
                 ;;
-            -r | --resume | --session-id | --from-pr)
+            -r | --resume | --session-id | --from-pr | -w | --worktree)
                 if [[ $word != *=* ]] && [ $((i + 1)) -lt "$n" ] && [[ ${ARGV[i + 1]} != -* ]]; then
                     i=$((i + 1))
                 fi
@@ -341,8 +392,16 @@ resolve_exe() {
         /*) EXE=$argv0 ;;
     esac
 
+    # node or bun without the CLI script in argv (a rewritten title) is no use.
     if [ -z "$EXE" ] && [ "$USE_PROC" = 1 ] && command -v readlink >/dev/null 2>&1; then
         EXE=$(readlink "/proc/$CPID/exe" 2>/dev/null)
+        EXE=${EXE% (deleted)}
+
+        if [ "$SCRIPT_INDEX" = 0 ]; then
+            case ${EXE##*/} in
+                node | nodejs | bun) EXE='' ;;
+            esac
+        fi
     fi
 
     if [ -z "$EXE" ]; then
@@ -481,29 +540,50 @@ quiet() {
 }
 
 # Starts a command that keeps running (a terminal emulator) in the background,
-# detached so $.process.run, which waits for EOF on our output, returns.
+# detached so $.process.run, which waits for EOF on our output, returns. A
+# terminal that dies at once (a stale DISPLAY over SSH) is a failure; one
+# still running half a second later, or already done with status 0 (it handed
+# the window to a running server), is a success.
 detach() {
+    local child
     command -v "$1" >/dev/null 2>&1 || return 1
 
+    # Not setsid -f: that forks, and $! would be setsid, not the terminal.
+    # Plain setsid in a background job (never a process group leader here,
+    # job control is off) execs in place, as nohup does.
     if command -v setsid >/dev/null 2>&1; then
         setsid "$@" </dev/null >/dev/null 2>&1 &
     else
         nohup "$@" </dev/null >/dev/null 2>&1 &
     fi
+    child=$!
+
+    sleep 0.5
+    kill -0 "$child" 2>/dev/null && return 0
+    wait "$child"
 }
 
 # Opens a tab or window of one terminal kind running FILE. Nonzero when that
 # terminal is missing or refused.
 open_with() {
-    local kind=$1 file=$2
+    local kind=$1 file=$2 hash='#' tmux_title
     sq "$file"
     local run="bash $Q"
 
+    # A plain assignment: bash 3.2 keeps these inner quotes inside "...".
+    tmux_title=${TITLE//"$hash"/"$hash$hash"}
+
     case $kind in
         none) return 1 ;;
-        tmux) quiet tmux new-window -c "$DIR" -n "$TITLE" bash "$file" ;;
+        # tmux expands formats in -n and -c, so a folder named `#(command)`
+        # would run it: no -c (the tab script cds itself), and every # in the
+        # title doubled so it stands for itself.
+        tmux) quiet tmux new-window -n "$tmux_title" bash "$file" ;;
         wezterm) quiet wezterm cli spawn --cwd "$DIR" -- bash "$file" ;;
         kitty) quiet kitty @ launch --type=tab --cwd "$DIR" --tab-title "$TITLE" bash "$file" ;;
+        # osascript can block on a macOS Automation permission prompt until it
+        # is answered. It stays synchronous so a refusal counts as a failure;
+        # the mod gives $.process.run a timeout long enough for the prompt.
         iterm)
             quiet osascript -e 'on run argv' -e 'tell application "iTerm2"' -e 'tell current window' \
                 -e 'create tab with default profile command (item 1 of argv)' \
@@ -553,10 +633,17 @@ emit_ok() {
     fi
 
     [ "$LOSSY" = 1 ] && out+=',"lossy_args":true'
+    [ "$DROPPED" = 1 ] && out+=',"dropped_flags":true'
     printf '%s}\n' "$out"
 }
 
 find_claude || fail 'could not find the parent claude process'
+
+DROPPED=0
+if [ "$LOSSY" = 1 ] || title_rewritten; then
+    DROPPED=1
+fi
+
 keep_args
 ARGS=(--resume "$SESSION_ID" "${KEPT[@]}")
 resolve_exe
@@ -572,7 +659,8 @@ TITLE="$LEAF ${SESSION_ID:0:8}"
 
 build_tab_script
 pick_terminals
-NO_TAB="no terminal to open a tab in (no tmux, no display); run it yourself: cd $(sq "$DIR"; printf '%s' "$Q") && $MANUAL"
+RUN_IT="cd $(sq "$DIR"; printf '%s' "$Q") && $MANUAL"
+NO_TAB="no terminal to open a tab in (no tmux, no display); run it yourself: $RUN_IT"
 
 if [ "$DRY_RUN" = 1 ]; then
     [ "${CANDIDATES[0]}" = none ] && fail "$NO_TAB"
@@ -611,7 +699,12 @@ done
 
 if [ -z "$TERMINAL" ]; then
     rm -f "$FILE"
-    fail "$NO_TAB"
+
+    if [ ${#CANDIDATES[@]} -eq 0 ] || [ "${CANDIDATES[0]}" = none ]; then
+        fail "$NO_TAB"
+    fi
+
+    fail "no terminal could open a tab (tried: ${CANDIDATES[*]}); run it yourself: $RUN_IT"
 fi
 
 emit_ok
