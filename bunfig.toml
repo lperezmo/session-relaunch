@@ -1,0 +1,10 @@
+[fmt]
+# Matches the style the code already had: no semicolons, single quotes, long lines.
+printWidth = 120
+semi = false
+singleQuote = true
+
+[lint]
+
+[lint.rules]
+"eqeqeq" = ["error", "smart"]
