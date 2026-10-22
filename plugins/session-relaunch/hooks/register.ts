@@ -45,7 +45,7 @@ export const USAGE = [
   '  /relaunch compact [note]  compact first (the note also steers the summary), then relaunch',
   '  /relaunch stay [note]     open the new tab but leave this session running (it starts once you /exit)',
   '  /relaunch <note>          text without a keyword is a note; it still asks first',
-  'The note is put in the new session\'s prompt box. /relaunch help shows this.',
+  "The note is put in the new session's prompt box. /relaunch help shows this.",
 ].join('\n')
 
 /** The confirm dialog's labels and the mode each one picks. */
@@ -66,7 +66,8 @@ const WAIT_SECONDS = 120
  */
 const LAUNCH_TIMEOUT_MS = 120_000
 
-const ALREADY_WAITING = 'A tab from an earlier /relaunch is still waiting on this session. Type /exit here and it takes over.'
+const ALREADY_WAITING =
+  'A tab from an earlier /relaunch is still waiting on this session. Type /exit here and it takes over.'
 
 /**
  * `$.command.run` from inside a `command.run` hook is refused (it would wait
@@ -111,7 +112,12 @@ type Launched = { ok: true; opened: string } | { ok: false; text: string }
  * @param note the note for the new session's prompt box, possibly empty
  * @param startModel the model the session started on, so only a change is carried
  */
-async function launch($: EngineInterface, stay: boolean, note: string, startModel: string | undefined): Promise<Launched> {
+async function launch(
+  $: EngineInterface,
+  stay: boolean,
+  note: string,
+  startModel: string | undefined,
+): Promise<Launched> {
   const sessionId = await $.session.id()
   // The project root, not the current directory: a shell `cd` during the
   // session moves the latter, and the new tab should open where it started.
@@ -122,7 +128,20 @@ async function launch($: EngineInterface, stay: boolean, note: string, startMode
   const windows = isWindowsPath(root)
 
   const argv = windows
-    ? ['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', `${root}\\hooks\\relaunch.ps1`, '-SessionId', sessionId, '-Cwd', cwd, '-WaitSeconds', wait]
+    ? [
+        'powershell.exe',
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        `${root}\\hooks\\relaunch.ps1`,
+        '-SessionId',
+        sessionId,
+        '-Cwd',
+        cwd,
+        '-WaitSeconds',
+        wait,
+      ]
     : ['bash', `${root}/hooks/relaunch.sh`, '--session-id', sessionId, '--cwd', cwd, '--wait-seconds', wait]
 
   if (isModelFlag(model) && model !== startModel) {
@@ -148,7 +167,10 @@ async function launch($: EngineInterface, stay: boolean, note: string, startMode
 
   const dropped = result.dropped_flags ? ' (its original flags could not be read, so it starts without them)' : ''
 
-  return { ok: true, opened: `Opened a new tab (${result.title}) running: ${commandLine(result.exe, result.args)}${dropped}` }
+  return {
+    ok: true,
+    opened: `Opened a new tab (${result.title}) running: ${commandLine(result.exe, result.args)}${dropped}`,
+  }
 }
 
 /**
@@ -286,7 +308,7 @@ export function register(on: On) {
     return next(e)
   })
 
-  on('command.run', { command: COMMAND_NAME }, async ($, e, next) => {
+  on('command.run', { command: COMMAND_NAME }, async ($, e, _next) => {
     const parsed = parseArgs(e.args)
 
     if (parsed.mode === 'help') {
@@ -349,8 +371,7 @@ export function register(on: On) {
     exitSoon($, opened)
 
     return { text: `${opened}\nExiting this session...` }
-  })
-    .catch(($, e, next) => (next.called ? next(e) : { text: `/relaunch failed: ${next.error.message}` }))
+  }).catch(($, e, next) => (next.called ? next(e) : { text: `/relaunch failed: ${next.error.message}` }))
 
   // MCP-change nudge: after the call, a transcript line for the person
   // (`ui.log` is never sent to the model); the result goes back untouched.
@@ -366,6 +387,5 @@ export function register(on: On) {
     }
 
     return result
-  })
-    .catch(($, e, next) => next(e))
+  }).catch(($, e, next) => next(e))
 }

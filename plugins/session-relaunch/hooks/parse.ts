@@ -75,7 +75,7 @@ export function isWindowsPath(path: string): boolean {
 
 /** `exe args...` as one line, quoting the parts that hold spaces. */
 export function commandLine(exe: string, args: readonly string[]): string {
-  return [exe, ...args].map(part => (/\s/.test(part) || part === '' ? `"${part}"` : part)).join(' ')
+  return [exe, ...args].map((part) => (/\s/.test(part) || part === '' ? `"${part}"` : part)).join(' ')
 }
 
 /**

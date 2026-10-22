@@ -101,3 +101,15 @@ jobs:
           EOF
 
       - run: bun test
+
+  format-and-lint:
+    name: bun fmt and lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      # bun fmt and bun lint are canary-only until they reach a stable release.
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: canary
+      - run: bun fmt --check .
+      - run: bun lint --max-warnings 0 --format github

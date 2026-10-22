@@ -8,7 +8,8 @@
  * `claude mcp <verb>` with a verb that changes the configured servers, the
  * executable bare, as `claude.exe`/`claude.cmd`, or at the end of a path.
  */
-const MCP_CLI_RE = /(?:^|[\s;&|(`'"\\/])claude(?:\.exe|\.cmd)?\s+mcp\s+(add-from-claude-desktop|add-json|add|remove)(?=\s|$|[;&|)`'"])/i
+const MCP_CLI_RE =
+  /(?:^|[\s;&|(`'"\\/])claude(?:\.exe|\.cmd)?\s+mcp\s+(add-from-claude-desktop|add-json|add|remove)(?=\s|$|[;&|)`'"])/i
 
 /** The basename of a Windows or POSIX path. */
 function basename(path: string): string {

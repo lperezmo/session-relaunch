@@ -1,7 +1,16 @@
 import { describe, expect, test, tier } from 'claude-code/testing'
 
 import { mcpChange } from '../hooks/mcp-change'
-import { asPending, commandLine, isFresh, isModelFlag, isWaiting, isWindowsPath, parseArgs, parseLaunch } from '../hooks/parse'
+import {
+  asPending,
+  commandLine,
+  isFresh,
+  isModelFlag,
+  isWaiting,
+  isWindowsPath,
+  parseArgs,
+  parseLaunch,
+} from '../hooks/parse'
 import { USAGE } from '../hooks/register'
 
 tier('user')
@@ -61,9 +70,9 @@ describe('parseLaunch', () => {
   })
 
   test('commandLine quotes parts with spaces', () => {
-    expect(commandLine('C:\\Program Files\\claude.exe', ['--resume', 'abc', '--append-system-prompt', 'be brief'])).toBe(
-      '"C:\\Program Files\\claude.exe" --resume abc --append-system-prompt "be brief"',
-    )
+    expect(
+      commandLine('C:\\Program Files\\claude.exe', ['--resume', 'abc', '--append-system-prompt', 'be brief']),
+    ).toBe('"C:\\Program Files\\claude.exe" --resume abc --append-system-prompt "be brief"')
   })
 })
 
@@ -117,8 +126,12 @@ describe('pending record', () => {
 describe('mcpChange', () => {
   test('claude mcp verbs that change servers are caught', () => {
     expect(mcpChange('Bash', { command: 'claude mcp add github -- npx github-mcp' })).toBe('claude mcp add')
-    expect(mcpChange('Bash', { command: 'cd /d/x && claude mcp add-json foo \'{"type":"http"}\'' })).toBe('claude mcp add-json')
-    expect(mcpChange('PowerShell', { command: 'claude.exe mcp add-from-claude-desktop' })).toBe('claude mcp add-from-claude-desktop')
+    expect(mcpChange('Bash', { command: 'cd /d/x && claude mcp add-json foo \'{"type":"http"}\'' })).toBe(
+      'claude mcp add-json',
+    )
+    expect(mcpChange('PowerShell', { command: 'claude.exe mcp add-from-claude-desktop' })).toBe(
+      'claude mcp add-from-claude-desktop',
+    )
     expect(mcpChange('PowerShell', { command: 'claude mcp remove github -s user' })).toBe('claude mcp remove')
     expect(mcpChange('Bash', { command: 'C:\\bin\\claude.exe mcp add x -- y' })).toBe('claude mcp add')
   })
@@ -145,7 +158,7 @@ describe('mcpChange', () => {
 })
 
 describe('register', () => {
-  test('/relaunch help answers with the usage', async ($, on) => {
+  test('/relaunch help answers with the usage', async ($, _on) => {
     const { text } = await $.command.run({ command: 'relaunch', args: 'help' })
 
     expect(text).toBe(USAGE)
