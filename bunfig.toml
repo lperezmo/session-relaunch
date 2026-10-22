@@ -8,3 +8,5 @@ singleQuote = true
 
 [lint.rules]
 "eqeqeq" = ["error", "smart"]
+# Hook and test callbacks keep their full signature; prefix an unused one with _.
+"@typescript-eslint/no-unused-vars" = ["warn", { argsIgnorePattern = "^_" }]

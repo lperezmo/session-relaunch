@@ -308,7 +308,7 @@ export function register(on: On) {
     return next(e)
   })
 
-  on('command.run', { command: COMMAND_NAME }, async ($, e, next) => {
+  on('command.run', { command: COMMAND_NAME }, async ($, e, _next) => {
     const parsed = parseArgs(e.args)
 
     if (parsed.mode === 'help') {

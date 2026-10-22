@@ -158,7 +158,7 @@ describe('mcpChange', () => {
 })
 
 describe('register', () => {
-  test('/relaunch help answers with the usage', async ($, on) => {
+  test('/relaunch help answers with the usage', async ($, _on) => {
     const { text } = await $.command.run({ command: 'relaunch', args: 'help' })
 
     expect(text).toBe(USAGE)
