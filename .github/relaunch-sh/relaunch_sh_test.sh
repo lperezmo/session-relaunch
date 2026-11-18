@@ -80,6 +80,13 @@ if command -v cc >/dev/null 2>&1 && cc -O0 -o "$T/bin/claude" "$HERE/fake_claude
     HAVE_CC=1
 fi
 
+# The same fake under the path a native install runs sessions from.
+VERSIONED="$T/vb/claude/versions/9.9.9"
+if [ "$HAVE_CC" = "1" ]; then
+    mkdir -p "${VERSIONED%/*}"
+    cp "$T/bin/claude" "$VERSIONED"
+fi
+
 NODE=$(command -v node 2>/dev/null || true)
 if [ -n "$NODE" ]; then
     CLI_DIR="$T/node/lib/node_modules/@anthropic-ai/claude-code"
@@ -263,6 +270,13 @@ set_relaunch() {
 # fake <claude flags...>: runs the fake claude in $D and waits for it.
 fake() {
     FAKE_DIR="$D" "$T/bin/claude" "$@" > "$D/out" 2> "$D/err"
+    RC=$?
+}
+
+# fake_bg <claude flags...>: a background session, the way the daemon runs
+# one: the pty host, and under it the versioned binary with the flags.
+fake_bg() {
+    FAKE_DIR="$D" "$T/bin/claude" --bg-pty-host "$D/pty.sock" 80 24 -- "$VERSIONED" "$@" > "$D/out" 2> "$D/err"
     RC=$?
 }
 
@@ -635,6 +649,149 @@ case_tab_script_runs() {
     fi
 }
 
+# --- background sessions --------------------------------------------------------
+
+# A native install runs a session as .../claude/versions/<version>, so its
+# argv[0] is not `claude`: it must still be the process found, flags and all.
+case_versioned_binary_detected() {
+    need_cc || return
+    set_relaunch --session-id "$SID" --cwd "$D" --wait-seconds 30 --dry-run
+    FAKE_DIR="$D" "$VERSIONED" --verbose --add-dir "/tmp/a b" > "$D/out" 2> "$D/err"
+    RC=$?
+    expect_dry_run "$D"
+    check args "$D/out" --resume "$SID" --verbose --add-dir "/tmp/a b"
+    if [ "$(python3 "$T/check.py" get "$D/out" would_use)" = "respawn" ]; then
+        fail "a session that is not under a pty host was taken for a background one"
+    fi
+}
+
+# `claude daemon run ...` hosts background sessions: it is not a session, and
+# its arguments must never be taken for one's flags.
+case_daemon_is_not_a_session() {
+    need_cc || return
+    set_relaunch --session-id "$SID" --cwd "$D" --wait-seconds 30 --dry-run
+    fake daemon run --origin transient
+    expect_ok_exit
+    check json "$D/out" || return
+    if [ "$(python3 "$T/check.py" get "$D/out" ok)" = "true" ] \
+        && [ "$(python3 "$T/check.py" get "$D/out" pid)" = "$(launcher_pid)" ]; then
+        fail "the daemon was taken for the session to relaunch"
+    fi
+}
+
+# Under a pty host the session restarts in place: `claude respawn <short id>`,
+# no tab, and the session's own flags are not carried anywhere.
+case_bg_dry_run() {
+    need_cc || return
+    set_relaunch --session-id "$SID" --cwd "$D" --wait-seconds 30 --dry-run
+    fake_bg --session-id "$SID" --model some-model --permission-mode auto
+    expect_ok_exit
+    check json "$D/out" || return
+    check eq "$D/out" ok true || return
+    check eq "$D/out" terminal '"dry-run"'
+    check eq "$D/out" would_use '"respawn"'
+    check eq "$D/out" pid "$(launcher_pid)"
+    check args "$D/out" respawn "$SHORT"
+    check contains "$D/out" script "respawn"
+    check contains "$D/out" script "claude attach"
+    save_tab_script
+    if ! "$RELAUNCH_BASH" -n "$D/tab.sh" 2> "$D/err"; then
+        fail "the respawn script does not parse under $RELAUNCH_BASH"
+    fi
+}
+
+# /relaunch stay keeps a tab waiting; a background session has no tab.
+case_bg_stay_refused() {
+    need_cc || return
+    set_relaunch --session-id "$SID" --cwd "$D" --wait-seconds 0
+    fake_bg --session-id "$SID"
+    expect_ok_exit
+    check eq "$D/out" ok false || return
+    check contains "$D/out" error "background session"
+    check contains "$D/out" error "claude respawn $SHORT"
+    sleep 2
+    if [ -e "$D/respawn.argv" ]; then
+        fail "claude respawn ran although the relaunch was refused"
+    fi
+}
+
+# The id is typed into a shell by the helper: only a real one may get there.
+case_bg_odd_session_id_refused() {
+    need_cc || return
+    set_relaunch --session-id 'abc; touch pwned' --cwd "$D" --wait-seconds 30
+    fake_bg --verbose
+    expect_ok_exit
+    check eq "$D/out" ok false || return
+    sleep 2
+    if [ -e "$D/respawn.argv" ]; then
+        fail "claude respawn ran with an id that is not one"
+    fi
+}
+
+# The full flow: the helper respawns, and when the viewer's goodbye shows at a
+# shell prompt in a tmux pane, types `claude attach <short id>` there.
+case_bg_respawn_reattaches_in_tmux() {
+    need_cc || return
+    if ! command -v tmux >/dev/null 2>&1; then
+        skip "no tmux"
+        return
+    fi
+    start_tmux bgr || { fail "could not start tmux"; return; }
+    # A shell without rc files, so `claude` in the pane is the fake one.
+    tmux -L "$TMUX_NAME" respawn-pane -k -t main "PATH='$T/bin':\"\$PATH\" FAKE_DIR='$D' exec bash --norc --noprofile"
+    sleep 1
+    set_relaunch --session-id "$SID" --cwd "$D" --wait-seconds 30
+    TMUX="$TMUX_VALUE" fake_bg --session-id "$SID" --model some-model
+    expect_ok_exit
+    check json "$D/out" || return
+    check eq "$D/out" ok true || return
+    check eq "$D/out" terminal '"respawn"'
+    check args "$D/out" respawn "$SHORT"
+
+    if ! wait_for "$D/respawn.argv" 15; then
+        fail "claude respawn never ran"
+        return
+    fi
+    check nul "$D/respawn.argv" respawn "$SHORT"
+
+    # What the viewer leaves behind when its session is restarted.
+    tmux -L "$TMUX_NAME" send-keys -t main -l "echo 'Session $SHORT has exited.'"
+    tmux -L "$TMUX_NAME" send-keys -t main Enter
+
+    if ! wait_for "$D/attach.argv" 25; then
+        fail "claude attach was never typed into the pane; it shows:"
+        fail "$(tmux -L "$TMUX_NAME" capture-pane -p -t main 2>&1 | grep -v '^$' | tail -5 | tr '\n' '|')"
+        return
+    fi
+    check nul "$D/attach.argv" attach "$SHORT"
+}
+
+# A goodbye that was already on screen before the respawn belongs to an
+# earlier restart: nothing is typed into that pane.
+case_bg_respawn_leaves_old_goodbye() {
+    need_cc || return
+    if ! command -v tmux >/dev/null 2>&1; then
+        skip "no tmux"
+        return
+    fi
+    start_tmux bgo || { fail "could not start tmux"; return; }
+    tmux -L "$TMUX_NAME" send-keys -t main -l "echo 'Session $SHORT has exited.'"
+    tmux -L "$TMUX_NAME" send-keys -t main Enter
+    sleep 1
+    set_relaunch --session-id "$SID" --cwd "$D" --wait-seconds 30
+    TMUX="$TMUX_VALUE" fake_bg --session-id "$SID"
+    check eq "$D/out" ok true || return
+
+    if ! wait_for "$D/respawn.argv" 15; then
+        fail "claude respawn never ran"
+        return
+    fi
+    sleep 4
+    if [ -e "$D/attach.argv" ]; then
+        fail "claude attach was typed into a pane whose goodbye was there before the respawn"
+    fi
+}
+
 # --- real terminal cases ----------------------------------------------------------
 
 # Starts a private tmux server whose windows see FAKE_DIR=$D, and sets
@@ -934,6 +1091,13 @@ for name in \
     title_exact_node \
     tab_script_runs \
     mac_ps_fallback \
+    versioned_binary_detected \
+    daemon_is_not_a_session \
+    bg_dry_run \
+    bg_stay_refused \
+    bg_odd_session_id_refused \
+    bg_respawn_reattaches_in_tmux \
+    bg_respawn_leaves_old_goodbye \
     tmux_resume \
     tmux_format_in_cwd \
     tmux_gives_up_while_old_runs \

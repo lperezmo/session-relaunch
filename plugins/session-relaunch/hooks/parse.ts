@@ -45,6 +45,10 @@ export function parseArgs(raw: string): RelaunchArgs {
 /** The environment variable that turns Code Mode (experimental) on; the helpers carry it to the new tab. */
 export const CODE_MODE_ENV = 'CLAUDE_CODE_EXPERIMENTAL_CODE_MODE'
 
+/**
+ * `terminal` names what opened the tab, or reads `respawn` when a background
+ * session is restarted in place, with `args` then being `respawn <short id>`.
+ */
 export type LaunchResult =
   | {
       ok: true

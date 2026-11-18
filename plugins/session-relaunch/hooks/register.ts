@@ -10,6 +10,10 @@
  * Resuming by id rather than `--continue` picks the right session when
  * several are open at once.
  *
+ * A background session (`claude --bg`, /background) has no tab of its own and
+ * does not end with `/exit`: the helper restarts it in place with
+ * `claude respawn` and this process is simply replaced.
+ *
  * Also nudges the person (never the model) when a tool call changes the MCP
  * configuration, since that is exactly when a relaunch is needed.
  *
@@ -71,6 +75,15 @@ const ALREADY_WAITING =
   'A tab from an earlier /relaunch is still waiting on this session. Type /exit here and it takes over.'
 
 /**
+ * How long a second /relaunch is refused after an in-place restart was asked
+ * for: the restart itself takes a couple of seconds.
+ */
+const IN_PLACE_WAIT_MS = 15_000
+
+/** What `terminal` reads when the helper restarts a background session in place. */
+const IN_PLACE = 'respawn'
+
+/**
  * `$.command.run` from inside a `command.run` hook is refused (it would wait
  * on the turn the hook holds), so `/exit` runs from a timer just after
  * /relaunch has answered.
@@ -103,7 +116,7 @@ function exitSoon($: EngineInterface, opened: string) {
   })
 }
 
-type Launched = { ok: true; opened: string } | { ok: false; text: string }
+type Launched = { ok: true; opened: string; inPlace: boolean } | { ok: false; text: string }
 
 /**
  * Opens the new tab through relaunch.ps1 or relaunch.sh and leaves the welcome-back record.
@@ -156,21 +169,34 @@ async function launch(
     return { ok: false, text: `/relaunch could not open the new tab: ${result.error}` }
   }
 
+  const inPlace = result.terminal === IN_PLACE
+
   const record: PendingRecord = {
     id: sessionId,
     at: await $.clock.now(),
     note,
     ttlMs: stay ? PENDING_STAY_TTL_MS : PENDING_TTL_MS,
-    waitMs: stay ? 0 : WAIT_SECONDS * 1000,
+    waitMs: inPlace ? IN_PLACE_WAIT_MS : stay ? 0 : WAIT_SECONDS * 1000,
   }
 
   await $.store.set(`${PENDING_PREFIX}${sessionId}`, record)
+
+  if (inPlace) {
+    const attach = commandLine('claude', ['attach', ...result.args.slice(1)])
+
+    return {
+      ok: true,
+      inPlace,
+      opened: `This is a background session, so it restarts in place: ${commandLine(result.exe, result.args)}\nIf this view closes and does not come back by itself, run: ${attach}`,
+    }
+  }
 
   const env = result.code_mode ? `${CODE_MODE_ENV}=1 ` : ''
   const dropped = result.dropped_flags ? ' (its original flags could not be read, so it starts without them)' : ''
 
   return {
     ok: true,
+    inPlace,
     opened: `Opened a new tab (${result.title}) running: ${env}${commandLine(result.exe, result.args)}${dropped}`,
   }
 }
@@ -216,7 +242,14 @@ async function compactThenRelaunch($: EngineInterface, note: string, startModel:
       return
     }
 
-    $.ui.log(launched.opened)
+    for (const line of launched.opened.split('\n')) {
+      $.ui.log(line)
+    }
+
+    if (launched.inPlace) {
+      return
+    }
+
     $.ui.log('Exiting this session...')
     exitSoon($, launched.opened)
   } catch (error) {
@@ -364,6 +397,12 @@ export function register(on: On) {
     }
 
     const opened = launched.opened
+
+    if (launched.inPlace) {
+      $.ui.toast('Restarting in place...')
+
+      return { text: opened }
+    }
 
     if (stay) {
       return { text: `${opened}\nIt starts once you /exit here, however long that takes.` }
