@@ -18,9 +18,6 @@ param(
     [int]$WaitSeconds = 120,
     # Replaces any --model from the original command line.
     [string]$Model = '',
-    # Start the new claude with CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1. Without it
-    # the variable is carried over as this process has it.
-    [switch]$CodeMode,
     # Print what would be launched, open nothing.
     [switch]$DryRun
 )
@@ -207,10 +204,13 @@ function New-TabScript([int]$waitPid, [string]$command, [string[]]$arguments, [s
     $crt = Quote-Ps (($arguments | ForEach-Object { ConvertTo-CrtArg $_ }) -join ' ')
     $codeLine = ''
     $codeManual = ''
+    $codeClear = ''
 
     if ($codeMode) {
         $codeLine = '$env:CLAUDE_CODE_EXPERIMENTAL_CODE_MODE = ' + (Quote-Ps $codeMode)
         $codeManual = $codeLine + '; '
+        # Only the new claude gets it, not the shell the tab is left with.
+        $codeClear = 'Remove-Item Env:CLAUDE_CODE_EXPERIMENTAL_CODE_MODE -ErrorAction SilentlyContinue'
     }
 
     $manual = Quote-Ps ('  ' + $codeManual + ((@($command) + $arguments | ForEach-Object { ConvertTo-CrtArg $_ }) -join ' '))
@@ -251,6 +251,7 @@ if (-not `$cmd) {
     `$argv = @($raw)
     & `$cmd @argv
 }
+$codeClear
 "@
 
     if ($waitSeconds -le 0) {
@@ -372,8 +373,9 @@ try {
     if (-not $leaf) { $leaf = $Cwd }
     $title = $leaf + ' ' + $SessionId.Substring(0, [Math]::Min(8, $SessionId.Length))
 
+    # Carried over as this process has it: a session started in Code Mode
+    # cannot be resumed without it.
     $codeModeValue = $env:CLAUDE_CODE_EXPERIMENTAL_CODE_MODE
-    if ($CodeMode) { $codeModeValue = '1' }
 
     $script = New-TabScript $proc.ProcessId $exe $argList $title $WaitSeconds $Cwd $codeModeValue
 
