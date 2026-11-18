@@ -10,7 +10,11 @@
 # and hands the new tab a script that waits on the old PID before running
 # `claude --resume <id>`, so two processes never write the same transcript.
 #
-# Usage: relaunch.sh --session-id ID --cwd DIR --wait-seconds N [--model M] [--dry-run]
+# Usage: relaunch.sh --session-id ID --cwd DIR --wait-seconds N [--model M] [--code-mode] [--dry-run]
+#
+# --code-mode starts the new claude with CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1. Without it
+# the variable is carried over as this process has it, since a terminal tab
+# does not inherit our environment.
 #
 # Prints one JSON line and exits 0: { ok, pid, terminal, exe, args, title }
 # (plus dir, script and would_use with --dry-run, lossy_args when argv had to
@@ -81,6 +85,8 @@ CWD_ARG=''
 WAIT_SECONDS=120
 MODEL=''
 DRY_RUN=0
+# The value CLAUDE_CODE_EXPERIMENTAL_CODE_MODE gets in the new tab; empty leaves it unset.
+CODE_MODE=${CLAUDE_CODE_EXPERIMENTAL_CODE_MODE:-}
 
 while [ $# -gt 0 ]; do
     case $1 in
@@ -96,6 +102,10 @@ while [ $# -gt 0 ]; do
             ;;
         --dry-run)
             DRY_RUN=1
+            shift
+            ;;
+        --code-mode)
+            CODE_MODE=1
             shift
             ;;
         *) fail "unknown argument: $1" ;;
@@ -428,12 +438,19 @@ resolve_exe() {
 # Sets SCRIPT to what the new tab runs: wait for the old PID, then start the
 # command, then leave an interactive shell so the tab stays open.
 build_tab_script() {
-    local nl=$'\n' a cmd manual launch alive title dir
+    local nl=$'\n' a cmd manual launch alive title dir code_mode_q
 
     sq "$EXE"
     cmd=$Q
     sq_display "$EXE"
     manual="  $Q"
+
+    if [ -n "$CODE_MODE" ]; then
+        sq_display "$CODE_MODE"
+        code_mode_q=$Q
+        sq_display "$EXE"
+        manual="  CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=$code_mode_q $Q"
+    fi
 
     for a in "${ARGS[@]}"; do
         sq "$a"
@@ -466,6 +483,11 @@ build_tab_script() {
     SCRIPT+="rm -f \"\$0\"${nl}"
     SCRIPT+="printf '\\033]0;%s\\007' $title${nl}"
     SCRIPT+="unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_CHILD_SESSION CLAUDE_CODE_SESSION_ID CLAUDE_PID CLAUDE_EFFORT CLAUDE_CODE_MESSAGING_SOCKET CLAUDE_CODE_MESSAGING_TOKEN CLAUDE_CODE_BRIDGE_SESSION_ID CLAUDE_CODE_SESSION_ATTENDED CLAUDE_CODE_EXECPATH${nl}"
+    if [ -n "$CODE_MODE" ]; then
+        sq "$CODE_MODE"
+        SCRIPT+="export CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=$Q${nl}"
+    fi
+
     SCRIPT+="cd -- $dir${nl}"
 
     if [ "$WAIT_SECONDS" -le 0 ]; then
@@ -634,6 +656,7 @@ emit_ok() {
 
     [ "$LOSSY" = 1 ] && out+=',"lossy_args":true'
     [ "$DROPPED" = 1 ] && out+=',"dropped_flags":true'
+    [ -n "$CODE_MODE" ] && [ "$CODE_MODE" != 0 ] && out+=',"code_mode":true'
     printf '%s}\n' "$out"
 }
 

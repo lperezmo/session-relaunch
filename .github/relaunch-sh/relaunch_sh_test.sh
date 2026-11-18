@@ -322,6 +322,10 @@ EOF
 
 # --- dry-run cases ------------------------------------------------------------
 
+# relaunch.sh carries this over from its caller; a run under a Code Mode
+# session must not leak it into every case.
+unset CLAUDE_CODE_EXPERIMENTAL_CODE_MODE
+
 case_syntax() {
     if ! "$RELAUNCH_BASH" -n "$SCRIPT" 2> "$D/err"; then
         fail "$RELAUNCH_BASH -n hooks/relaunch.sh failed"
@@ -372,6 +376,39 @@ case_model_replaced() {
     fake --model old --verbose --model=older
     expect_dry_run "$D"
     check args "$D/out" --resume "$SID" --verbose --model 'claude-opus-4-1[1m]'
+}
+
+# --code-mode exports the variable in the tab script and names it in the
+# command to run by hand; without the flag the caller's own value is carried.
+case_code_mode_flag() {
+    need_cc || return
+    set_relaunch --session-id "$SID" --cwd "$D" --wait-seconds 120 --code-mode --dry-run
+    fake --verbose
+    expect_dry_run "$D"
+    check args "$D/out" --resume "$SID" --verbose
+    grep -q '"code_mode":true' "$D/out" || fail 'no code_mode in the JSON line'
+    grep -q "export CLAUDE_CODE_EXPERIMENTAL_CODE_MODE='1'" "$D/out" || fail 'the tab script does not export the variable'
+}
+
+case_code_mode_off_by_default() {
+    need_cc || return
+    set_relaunch --session-id "$SID" --cwd "$D" --wait-seconds 120 --dry-run
+    fake --verbose
+    expect_dry_run "$D"
+    check absent "$D/out" code_mode
+    if grep -q 'CLAUDE_CODE_EXPERIMENTAL_CODE_MODE' "$D/out"; then
+        fail 'the tab script sets the variable without --code-mode'
+    fi
+}
+
+case_code_mode_carried_from_env() {
+    need_cc || return
+    set_relaunch --session-id "$SID" --cwd "$D" --wait-seconds 120 --dry-run
+    export CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1
+    fake --verbose
+    unset CLAUDE_CODE_EXPERIMENTAL_CODE_MODE
+    expect_dry_run "$D"
+    grep -q '"code_mode":true' "$D/out" || fail 'the caller'\''s Code Mode was not carried over'
 }
 
 case_model_kept_without_override() {
@@ -889,6 +926,9 @@ for name in \
     drops_worktree_flags \
     model_replaced \
     model_kept_without_override \
+    code_mode_flag \
+    code_mode_off_by_default \
+    code_mode_carried_from_env \
     special_chars_kept \
     empty_arg_kept \
     newline_in_arg_kept \

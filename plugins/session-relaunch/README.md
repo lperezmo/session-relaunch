@@ -20,11 +20,17 @@ Works on Windows, macOS and Linux. Needs Claude Code 2.1.287 or later.
 /relaunch now [note]      reopen this session in a new tab and exit this one
 /relaunch compact [note]  compact first (the note steers the summary), then relaunch
 /relaunch stay [note]     open the new tab; it starts once you /exit here
+/relaunch codemode [note] relaunch now with Code Mode (experimental) on
 /relaunch help            show this
 ```
 
 The note is typed into the new session's prompt box. When a tool call adds or
 removes an MCP server, the mod prints a one-line reminder to `/relaunch`.
+
+`/relaunch codemode` starts the new process with `CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1`, so a
+session started plain continues in Code Mode. Typing a prompt that opens with `experiment on me`
+does the same; the rest of the prompt becomes the note. It goes one way: a conversation that has
+run in Code Mode can only be continued in Code Mode, so every later `/relaunch` keeps it on.
 
 One catch: if you started the session with a prompt (`claude "do X"`), that
 prompt is part of the command line and gets sent again on relaunch.
