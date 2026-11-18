@@ -2,7 +2,7 @@
  * A stand-in for the claude binary, for .github/relaunch-sh/relaunch_sh_test.sh.
  *
  * Built as $FAKE_DIR/bin/claude so its argv[0] basename is `claude`, the way
- * relaunch.sh spots the real one. Two roles, picked by argv[1]:
+ * relaunch.sh spots the real one. Its roles, picked by argv[1]:
  *
  *   claude --resume ...   the new session: writes its argv (NUL separated),
  *                         cwd, and whether the old session was still alive
@@ -11,6 +11,11 @@
  *                         in $FAKE_DIR/relaunch.argv (NUL separated) as its
  *                         child, waits for it, stays up FAKE_LINGER_MS more
  *                         (as the real one does until /exit), then exits.
+ *   claude --bg-pty-host SOCK COLS ROWS -- CMD...
+ *                         the pty host of a background session: runs CMD as
+ *                         its child and waits for it, nothing else.
+ *   claude respawn ID     writes its argv to $FAKE_DIR/respawn.argv and
+ *   claude attach ID      prints "restarted ID"; attach writes attach.argv.
  *
  * FAKE_DIR comes from the environment, else from -DFAKE_DIR_DEFAULT.
  *
@@ -198,6 +203,62 @@ static int launcher(const char *dir, int argc, char **argv) {
     return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
 }
 
+/* `claude respawn ID` and `claude attach ID`: leave the argv for the test. */
+static int recorded(const char *dir, int argc, char **argv) {
+    char name[64];
+    size_t total = 0;
+    char *buf;
+    int i;
+
+    for (i = 1; i < argc; i++) {
+        total += strlen(argv[i]) + 1;
+    }
+    buf = malloc(total + 1);
+    total = 0;
+    for (i = 1; i < argc; i++) {
+        size_t n = strlen(argv[i]) + 1;
+        memcpy(buf + total, argv[i], n);
+        total += n;
+    }
+
+    snprintf(name, sizeof name, "%s.argv", argv[1]);
+    write_file(dir, name, buf, total);
+
+    if (strcmp(argv[1], "respawn") == 0) {
+        printf("restarted %s\n", argc > 2 ? argv[2] : "");
+    }
+    return 0;
+}
+
+/* The pty host: runs what follows `--` as its child and waits for it. */
+static int pty_host(int argc, char **argv) {
+    int i = 2;
+    int status = 0;
+    pid_t child;
+
+    while (i < argc && strcmp(argv[i], "--") != 0) {
+        i++;
+    }
+    if (i + 1 >= argc) {
+        fprintf(stderr, "fake claude: --bg-pty-host without a command\n");
+        return 70;
+    }
+
+    child = fork();
+    if (child < 0) {
+        perror("fork");
+        return 70;
+    }
+    if (child == 0) {
+        execv(argv[i + 1], argv + i + 1);
+        perror(argv[i + 1]);
+        _exit(127);
+    }
+    while (waitpid(child, &status, 0) < 0 && errno == EINTR) {
+    }
+    return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
+}
+
 int main(int argc, char **argv) {
     const char *dir = getenv("FAKE_DIR");
 
@@ -207,6 +268,14 @@ int main(int argc, char **argv) {
 
     if (argc > 1 && strcmp(argv[1], "--resume") == 0) {
         return resumed(dir, argc, argv);
+    }
+
+    if (argc > 1 && strcmp(argv[1], "--bg-pty-host") == 0) {
+        return pty_host(argc, argv);
+    }
+
+    if (argc > 1 && (strcmp(argv[1], "respawn") == 0 || strcmp(argv[1], "attach") == 0)) {
+        return recorded(dir, argc, argv);
     }
 
     return launcher(dir, argc, argv);

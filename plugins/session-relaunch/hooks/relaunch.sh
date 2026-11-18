@@ -10,6 +10,15 @@
 # and hands the new tab a script that waits on the old PID before running
 # `claude --resume <id>`, so two processes never write the same transcript.
 #
+# A background session (`claude --bg`, /background) is different: it runs
+# under `claude bg-pty-host` in the daemon, with no terminal of its own, and
+# what the person sees is a viewer (`claude attach`) in some other process.
+# There is no tab to open for it and `/exit` is not how it ends. It is
+# restarted in place with `claude respawn <id>` instead, by a detached helper,
+# and when the viewer that was showing it drops back to a shell in a tmux
+# pane, the helper types `claude attach <id>` there so it comes back where it was.
+# --wait-seconds 0 (stay) is refused for one: there is no tab to keep waiting.
+#
 # Usage: relaunch.sh --session-id ID --cwd DIR --wait-seconds N [--model M] [--dry-run]
 #
 # CLAUDE_CODE_EXPERIMENTAL_CODE_MODE is carried over as this process has it: a
@@ -18,7 +27,8 @@
 # not for the shell the tab is left with.
 #
 # Prints one JSON line and exits 0: { ok, pid, terminal, exe, args, title }
-# (plus dir, script and would_use with --dry-run, lossy_args when argv had to
+# (terminal is "respawn" for a background session; plus dir, script and
+# would_use with --dry-run, lossy_args when argv had to
 # be split from ps output, and dropped_flags when the original flags could not
 # be read faithfully and the new session starts without them) or
 # { ok: false, error }.
@@ -88,6 +98,9 @@ MODEL=''
 DRY_RUN=0
 # The value CLAUDE_CODE_EXPERIMENTAL_CODE_MODE gets in the new tab; empty leaves it unset.
 CODE_MODE=${CLAUDE_CODE_EXPERIMENTAL_CODE_MODE:-}
+
+# How long the respawn helper lets /relaunch answer before it restarts the session.
+RESPAWN_DELAY=1.5
 
 while [ $# -gt 0 ]; do
     case $1 in
@@ -280,7 +293,19 @@ is_claude() {
     local base=${ARGV[0]##*/} j=1
     SCRIPT_INDEX=0
 
-    [ "$base" = claude ] && return 0
+    # `claude daemon ...` and `claude bg-pty-host ...` host background
+    # sessions; their arguments are not a session's flags.
+    is_bg_host && return 1
+
+    if [ "$base" = claude ]; then
+        [ "${ARGV[1]:-}" = daemon ] && return 1
+        return 0
+    fi
+
+    # The native install runs sessions as .../claude/versions/<version>.
+    case ${ARGV[0]} in
+        */claude/versions/*) return 0 ;;
+    esac
 
     case $base in
         node | nodejs | bun) ;;
@@ -298,9 +323,49 @@ is_claude() {
     return 1
 }
 
+# Whether ARGV is the pty host a background session runs under. It titles
+# itself, so argv[0] reads "claude bg-pty-host" with --bg-pty-host after it.
+is_bg_host() {
+    case ${ARGV[0]##*/} in
+        'claude bg-pty-host') return 0 ;;
+        claude) ;;
+        *) return 1 ;;
+    esac
+
+    case ${ARGV[1]:-} in
+        bg-pty-host | --bg-pty-host) return 0 ;;
+    esac
+
+    return 1
+}
+
+# Sets BACKGROUND=1 when the parent of PID is a background session's pty
+# host. Leaves ARGV, LOSSY, PADDED and SCRIPT_INDEX as they were.
+check_background() {
+    local saved=("${ARGV[@]}") lossy=$LOSSY padded=$PADDED index=$SCRIPT_INDEX
+
+    parent_of "$1"
+
+    case $PARENT in
+        '' | 0 | *[!0-9]*) ;;
+        *)
+            if read_argv "$PARENT" && is_bg_host; then
+                BACKGROUND=1
+            fi
+            ;;
+    esac
+
+    ARGV=("${saved[@]}")
+    LOSSY=$lossy
+    PADDED=$padded
+    SCRIPT_INDEX=$index
+}
+
 # The nearest claude ancestor, up to 8 levels up: sets CPID, ARGV,
-# SCRIPT_INDEX and LOSSY. RELAUNCH_CLAUDE_PID skips the search (tests).
+# SCRIPT_INDEX, LOSSY and BACKGROUND. RELAUNCH_CLAUDE_PID skips the search (tests).
 find_claude() {
+    BACKGROUND=0
+
     if [ -n "${RELAUNCH_CLAUDE_PID:-}" ]; then
         CPID=$RELAUNCH_CLAUDE_PID
 
@@ -310,10 +375,11 @@ find_claude() {
 
         read_argv "$CPID" || return 1
         is_claude
+        check_background "$CPID"
         return 0
     fi
 
-    local pid=$$ depth=0
+    local pid=$$ depth=0 below=''
 
     while [ "$depth" -lt 8 ]; do
         parent_of "$pid"
@@ -323,11 +389,25 @@ find_claude() {
             '' | 0 | *[!0-9]*) return 1 ;;
         esac
 
-        if read_argv "$pid" && is_claude; then
-            CPID=$pid
-            return 0
+        if read_argv "$pid"; then
+            if is_claude; then
+                CPID=$pid
+                check_background "$pid"
+                return 0
+            fi
+
+            # A session whose own argv gave it away as nothing (a rewritten
+            # title): the process just below its pty host is the session.
+            if is_bg_host && [ -n "$below" ]; then
+                CPID=$below
+                BACKGROUND=1
+                read_argv "$CPID" || return 1
+                SCRIPT_INDEX=0
+                return 0
+            fi
         fi
 
+        below=$pid
         depth=$((depth + 1))
     done
 
@@ -506,6 +586,107 @@ build_tab_script() {
     SCRIPT+="exec \"\${SHELL:-/bin/bash}\" -i${nl}"
 }
 
+# Sets SCRIPT to the helper that restarts a background session in place. It
+# runs detached, with no terminal: it gives /relaunch a moment to answer and
+# store its note, runs `claude respawn`, then looks through the tmux panes for
+# the viewer's goodbye ("Session <id> has exited", with or without a hint to
+# attach) at a shell prompt and types `claude attach <id>` there. A pane that already showed the
+# goodbye before the respawn is left alone, and so is everything when there
+# is no tmux, where the goodbye itself tells the person what to run.
+build_respawn_script() {
+    local nl=$'\n' exe_q
+
+    sq "$EXE"
+    exe_q=$Q
+
+    SCRIPT="#!/usr/bin/env bash${nl}"
+    SCRIPT+="rm -f \"\$0\"${nl}"
+    SCRIPT+="id=$JOB${nl}"
+    SCRIPT+="shells=' bash zsh fish sh dash ksh tcsh csh '${nl}"
+    SCRIPT+="have_tmux=0${nl}"
+    SCRIPT+="command -v tmux >/dev/null 2>&1 && have_tmux=1${nl}"
+    SCRIPT+="scan() {${nl}"
+    SCRIPT+="    local pane cmd text${nl}"
+    SCRIPT+="    HIT=''${nl}"
+    SCRIPT+="    [ \"\$have_tmux\" = 1 ] || return 0${nl}"
+    SCRIPT+="    while read -r pane cmd; do${nl}"
+    SCRIPT+="        case \$shells in *\" \$cmd \"*) ;; *) continue ;; esac${nl}"
+    SCRIPT+="        text=\$(tmux capture-pane -p -J -t \"\$pane\" 2>/dev/null | grep -v '^[[:space:]]*\$' | tail -n 4)${nl}"
+    SCRIPT+="        case \$text in *\"Session \$id has exited\"*) HIT=\"\$HIT \$pane\" ;; esac${nl}"
+    SCRIPT+="    done < <(tmux list-panes -a -F '#{pane_id} #{pane_current_command}' 2>/dev/null)${nl}"
+    SCRIPT+="}${nl}"
+    SCRIPT+="sleep $RESPAWN_DELAY${nl}"
+    SCRIPT+="scan${nl}"
+    SCRIPT+="before=\" \$HIT \"${nl}"
+    SCRIPT+="out=\$($exe_q respawn \"\$id\" 2>&1)${nl}"
+    SCRIPT+="case \$out in *restarted*) ;; *) exit 0 ;; esac${nl}"
+    SCRIPT+="typed=''${nl}"
+    SCRIPT+="deadline=\$((SECONDS + 20))${nl}"
+    SCRIPT+="while [ \"\$SECONDS\" -lt \"\$deadline\" ]; do${nl}"
+    SCRIPT+="    scan${nl}"
+    SCRIPT+="    for pane in \$HIT; do${nl}"
+    SCRIPT+="        case \$before in *\" \$pane \"*) continue ;; esac${nl}"
+    SCRIPT+="        tmux send-keys -t \"\$pane\" -l \"claude attach \$id\" && tmux send-keys -t \"\$pane\" Enter${nl}"
+    SCRIPT+="        typed=1${nl}"
+    SCRIPT+="    done${nl}"
+    SCRIPT+="    [ -n \"\$typed\" ] && break${nl}"
+    SCRIPT+="    sleep 0.3${nl}"
+    SCRIPT+="done${nl}"
+}
+
+# Restarts a background session in place, prints the JSON line and exits.
+relaunch_background() {
+    local found
+
+    case $SESSION_ID in
+        *[!0-9a-fA-F-]* | -*) fail "not a session id a background session can have: $SESSION_ID" ;;
+    esac
+
+    # `claude respawn` and `claude attach` take the short id, not the full one.
+    JOB=${SESSION_ID:0:8}
+
+    if [ "$WAIT_SECONDS" -le 0 ]; then
+        fail "this is a background session: it restarts in place, so there is no tab to keep waiting. Use /relaunch now, or from a shell: claude respawn $JOB"
+    fi
+
+    # A respawn keeps the environment the session started with, Code Mode
+    # included, so there is nothing to carry and nothing to report.
+    CODE_MODE=''
+
+    found=$(command -v claude 2>/dev/null)
+    case $found in
+        /*) EXE=$found ;;
+        *) fail "this is a background session, and claude is not on PATH to restart it; from a shell: claude respawn $JOB" ;;
+    esac
+
+    ARGS=(respawn "$JOB")
+    LOSSY=0
+    DROPPED=0
+    build_respawn_script
+
+    if [ "$DRY_RUN" = 1 ]; then
+        TERMINAL='dry-run'
+        WOULD_USE='respawn'
+        emit_ok
+        exit 0
+    fi
+
+    FILE=$(mktemp 2>/dev/null) || fail 'could not create the respawn script file'
+    printf '%s' "$SCRIPT" >"$FILE" || {
+        rm -f "$FILE"
+        fail 'could not write the respawn script file'
+    }
+
+    if ! detach bash "$FILE"; then
+        rm -f "$FILE"
+        fail "could not start the restart helper; from a shell: claude respawn $JOB"
+    fi
+
+    TERMINAL='respawn'
+    emit_ok
+    exit 0
+}
+
 # Fills CANDIDATES with the terminal kinds worth trying, best first, judged
 # only by which terminal variables are set. RELAUNCH_TERMINAL forces one.
 pick_terminals() {
@@ -676,6 +857,8 @@ done
 LEAF=${DIR##*/}
 [ -n "$LEAF" ] || LEAF=$CWD_ARG
 TITLE="$LEAF ${SESSION_ID:0:8}"
+
+[ "$BACKGROUND" = 1 ] && relaunch_background
 
 build_tab_script
 pick_terminals
