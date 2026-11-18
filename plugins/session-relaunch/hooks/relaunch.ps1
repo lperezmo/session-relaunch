@@ -18,6 +18,9 @@ param(
     [int]$WaitSeconds = 120,
     # Replaces any --model from the original command line.
     [string]$Model = '',
+    # Start the new claude with CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1. Without it
+    # the variable is carried over as this process has it.
+    [switch]$CodeMode,
     # Print what would be launched, open nothing.
     [switch]$DryRun
 )
@@ -199,10 +202,18 @@ function ConvertTo-CrtArg([string]$value) {
 # auto-update. An exe gets one command line built here, because 5.1 splits
 # values like {"a":["b c"]} when it passes them to a native exe itself; a
 # .ps1 shim gets the raw values.
-function New-TabScript([int]$waitPid, [string]$command, [string[]]$arguments, [string]$title, [int]$waitSeconds, [string]$location) {
+function New-TabScript([int]$waitPid, [string]$command, [string[]]$arguments, [string]$title, [int]$waitSeconds, [string]$location, [string]$codeMode) {
     $raw = ($arguments | ForEach-Object { Quote-Ps $_ }) -join ', '
     $crt = Quote-Ps (($arguments | ForEach-Object { ConvertTo-CrtArg $_ }) -join ' ')
-    $manual = Quote-Ps ('  ' + ((@($command) + $arguments | ForEach-Object { ConvertTo-CrtArg $_ }) -join ' '))
+    $codeLine = ''
+    $codeManual = ''
+
+    if ($codeMode) {
+        $codeLine = '$env:CLAUDE_CODE_EXPERIMENTAL_CODE_MODE = ' + (Quote-Ps $codeMode)
+        $codeManual = $codeLine + '; '
+    }
+
+    $manual = Quote-Ps ('  ' + $codeManual + ((@($command) + $arguments | ForEach-Object { ConvertTo-CrtArg $_ }) -join ' '))
     $envPaths = ($SessionEnvNames | ForEach-Object { 'Env:' + $_ }) -join ', '
     $alive = "Get-Process -Id $waitPid -ErrorAction SilentlyContinue"
 
@@ -211,6 +222,7 @@ function New-TabScript([int]$waitPid, [string]$command, [string[]]$arguments, [s
     $prelude = @"
 Remove-Item -LiteralPath `$PSCommandPath -Force -ErrorAction SilentlyContinue
 Remove-Item $envPaths -ErrorAction SilentlyContinue
+$codeLine
 `$host.UI.RawUI.WindowTitle = $(Quote-Ps $title)
 try {
     Set-Location -LiteralPath $(Quote-Ps $location) -ErrorAction Stop
@@ -360,7 +372,10 @@ try {
     if (-not $leaf) { $leaf = $Cwd }
     $title = $leaf + ' ' + $SessionId.Substring(0, [Math]::Min(8, $SessionId.Length))
 
-    $script = New-TabScript $proc.ProcessId $exe $argList $title $WaitSeconds $Cwd
+    $codeModeValue = $env:CLAUDE_CODE_EXPERIMENTAL_CODE_MODE
+    if ($CodeMode) { $codeModeValue = '1' }
+
+    $script = New-TabScript $proc.ProcessId $exe $argList $title $WaitSeconds $Cwd $codeModeValue
 
     if ($DryRun) {
         $terminal = 'dry-run'
@@ -370,6 +385,7 @@ try {
 
     $report = [ordered]@{ ok = $true; pid = $proc.ProcessId; terminal = $terminal; exe = $exe; args = $argList; title = $title }
     if ($DryRun) { $report.dir = $dir; $report.script = $script }
+    if ($codeModeValue -and $codeModeValue -ne '0') { $report.code_mode = $true }
     ConvertTo-AsciiJson ([pscustomobject]$report)
 } catch {
     ConvertTo-AsciiJson ([pscustomobject]@{ ok = $false; error = $_.Exception.Message })

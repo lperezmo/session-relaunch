@@ -5,11 +5,11 @@
  */
 
 /** What the first word of `/relaunch ...` picks; `ask` when it is none. */
-export type Mode = 'ask' | 'now' | 'compact' | 'stay' | 'help'
+export type Mode = 'ask' | 'now' | 'compact' | 'stay' | 'codemode' | 'help'
 
 export type RelaunchArgs = { mode: Mode; note: string }
 
-const KEYWORDS: readonly Mode[] = ['now', 'compact', 'stay', 'help']
+const KEYWORDS: readonly Mode[] = ['now', 'compact', 'stay', 'codemode', 'help']
 
 /**
  * Splits `/relaunch` arguments into an optional leading keyword and a note.
@@ -42,8 +42,35 @@ export function parseArgs(raw: string): RelaunchArgs {
   return { mode: 'ask', note: text }
 }
 
+/** The environment variable that turns Code Mode (experimental) on at startup. */
+export const CODE_MODE_ENV = 'CLAUDE_CODE_EXPERIMENTAL_CODE_MODE'
+
+/**
+ * The note of a prompt that asks for Code Mode in words, or null for any
+ * other prompt: "experiment on me", any case, then an optional note.
+ *
+ * The phrase has to open the prompt and end at a word boundary, so
+ * "experiment on memory usage" is an ordinary prompt.
+ *
+ * @param text the prompt as typed
+ */
+export function codeModeNote(text: string): string | null {
+  const match = /^\s*experiment on me(?![\w'-])[\s,.!?:;)-]*([\s\S]*)$/i.exec(text)
+
+  return match ? (match[1] ?? '').trim() : null
+}
+
 export type LaunchResult =
-  | { ok: true; pid: number; terminal: string; exe: string; args: string[]; title: string; dropped_flags?: boolean }
+  | {
+      ok: true
+      pid: number
+      terminal: string
+      exe: string
+      args: string[]
+      title: string
+      dropped_flags?: boolean
+      code_mode?: boolean
+    }
   | { ok: false; error: string }
 
 /** The helper's one JSON line, or a failure naming what it printed instead. */
