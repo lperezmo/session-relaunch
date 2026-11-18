@@ -3,7 +3,6 @@ import { describe, expect, test, tier } from 'claude-code/testing'
 import { mcpChange } from '../hooks/mcp-change'
 import {
   asPending,
-  codeModeNote,
   commandLine,
   isFresh,
   isModelFlag,
@@ -26,9 +25,6 @@ describe('parseArgs', () => {
     expect(parseArgs('now')).toEqual({ mode: 'now', note: '' })
     expect(parseArgs('compact')).toEqual({ mode: 'compact', note: '' })
     expect(parseArgs(' STAY ')).toEqual({ mode: 'stay', note: '' })
-    expect(parseArgs('codemode')).toEqual({ mode: 'codemode', note: '' })
-    expect(parseArgs('codemode try the REPL')).toEqual({ mode: 'codemode', note: 'try the REPL' })
-    expect(parseArgs('code review this')).toEqual({ mode: 'ask', note: 'code review this' })
   })
 
   test('everything after the keyword is the note, case kept', () => {
@@ -45,21 +41,6 @@ describe('parseArgs', () => {
     expect(parseArgs('help').mode).toBe('help')
     expect(parseArgs('?').mode).toBe('help')
     expect(parseArgs('--help').mode).toBe('help')
-  })
-})
-
-describe('codeModeNote', () => {
-  test('the phrase opens the prompt, any case, and the rest is the note', () => {
-    expect(codeModeNote('experiment on me')).toBe('')
-    expect(codeModeNote('  Experiment On Me!  ')).toBe('')
-    expect(codeModeNote('experiment on me, then refactor the parser')).toBe('then refactor the parser')
-    expect(codeModeNote('experiment on me claudia x)')).toBe('claudia x)')
-  })
-
-  test('any other prompt is left alone', () => {
-    expect(codeModeNote('experiment on memory usage')).toBe(null)
-    expect(codeModeNote('please experiment on me')).toBe(null)
-    expect(codeModeNote('')).toBe(null)
   })
 })
 

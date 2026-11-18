@@ -23,7 +23,6 @@ import { mcpChange } from './mcp-change'
 import {
   asPending,
   CODE_MODE_ENV,
-  codeModeNote,
   commandLine,
   isFresh,
   isModelFlag,
@@ -41,18 +40,17 @@ import {
 const COMMAND_NAME = 'relaunch'
 
 export const USAGE = [
-  'Usage: /relaunch [now|compact|stay|codemode] [note...]',
+  'Usage: /relaunch [now|compact|stay] [note...]',
   '  /relaunch                 ask: relaunch now, compact first, or open the tab and stay',
   '  /relaunch now [note]      reopen this session in a new tab and exit this one',
   '  /relaunch compact [note]  compact first (the note also steers the summary), then relaunch',
   '  /relaunch stay [note]     open the new tab but leave this session running (it starts once you /exit)',
-  '  /relaunch codemode [note] relaunch now with Code Mode (experimental) on; "experiment on me" does the same',
   '  /relaunch <note>          text without a keyword is a note; it still asks first',
   "The note is put in the new session's prompt box. /relaunch help shows this.",
 ].join('\n')
 
 /** The confirm dialog's labels and the mode each one picks. */
-const CHOICES: Record<string, Exclude<Mode, 'ask' | 'help' | 'codemode'>> = {
+const CHOICES: Record<string, Exclude<Mode, 'ask' | 'help'>> = {
   'Relaunch now': 'now',
   'Compact, then relaunch': 'compact',
   'Open tab, stay here': 'stay',
@@ -114,14 +112,12 @@ type Launched = { ok: true; opened: string } | { ok: false; text: string }
  * @param stay whether the new tab waits for this session without a time limit
  * @param note the note for the new session's prompt box, possibly empty
  * @param startModel the model the session started on, so only a change is carried
- * @param codeMode whether the new process starts with Code Mode (experimental) on
  */
 async function launch(
   $: EngineInterface,
   stay: boolean,
   note: string,
   startModel: string | undefined,
-  codeMode = false,
 ): Promise<Launched> {
   const sessionId = await $.session.id()
   // The project root, not the current directory: a shell `cd` during the
@@ -151,10 +147,6 @@ async function launch(
 
   if (isModelFlag(model) && model !== startModel) {
     argv.push(windows ? '-Model' : '--model', model)
-  }
-
-  if (codeMode) {
-    argv.push(windows ? '-CodeMode' : '--code-mode')
   }
 
   const run = await $.process.run(argv, { timeoutMs: LAUNCH_TIMEOUT_MS })
@@ -278,7 +270,7 @@ export function register(on: On) {
     await $.command.register({
       name: COMMAND_NAME,
       description: 'Restart this session in a new tab (--resume) so new MCP servers load',
-      argumentHint: '[now|compact|stay|codemode] [note]',
+      argumentHint: '[now|compact|stay] [note]',
     })
 
     startModel = await $.session.model()
@@ -365,7 +357,7 @@ export function register(on: On) {
     }
 
     const stay = mode === 'stay'
-    const launched = await launch($, stay, parsed.note, startModel, mode === 'codemode')
+    const launched = await launch($, stay, parsed.note, startModel)
 
     if (!launched.ok) {
       return { text: launched.text }
@@ -382,38 +374,6 @@ export function register(on: On) {
 
     return { text: `${opened}\nExiting this session...` }
   }).catch(($, e, next) => (next.called ? next(e) : { text: `/relaunch failed: ${next.error.message}` }))
-
-  // "experiment on me": the same as /relaunch codemode, asked for in words.
-  // The prompt is dropped (it never reaches the model); what follows the
-  // phrase is the note for the new session's prompt box.
-  on('prompt.submit', async ($, e, next) => {
-    const note = e.command || e.isMeta ? null : codeModeNote(e.text)
-
-    if (note === null) {
-      return next(e)
-    }
-
-    const surfaces = await $.session.surfaces()
-
-    if (!surfaces.includes('terminal')) {
-      return next(e)
-    }
-
-    if (await tabWaiting($)) {
-      return { drop: ALREADY_WAITING }
-    }
-
-    const launched = await launch($, false, note, startModel, true)
-
-    if (!launched.ok) {
-      return { drop: launched.text }
-    }
-
-    $.ui.toast('Relaunching in Code Mode...')
-    exitSoon($, launched.opened)
-
-    return { drop: `${launched.opened}\nExiting this session...` }
-  }).catch(($, e, next) => next(e))
 
   // MCP-change nudge: after the call, a transcript line for the person
   // (`ui.log` is never sent to the model); the result goes back untouched.

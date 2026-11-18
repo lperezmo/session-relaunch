@@ -378,18 +378,7 @@ case_model_replaced() {
     check args "$D/out" --resume "$SID" --verbose --model 'claude-opus-4-1[1m]'
 }
 
-# --code-mode exports the variable in the tab script and names it in the
-# command to run by hand; without the flag the caller's own value is carried.
-case_code_mode_flag() {
-    need_cc || return
-    set_relaunch --session-id "$SID" --cwd "$D" --wait-seconds 120 --code-mode --dry-run
-    fake --verbose
-    expect_dry_run "$D"
-    check args "$D/out" --resume "$SID" --verbose
-    grep -q '"code_mode":true' "$D/out" || fail 'no code_mode in the JSON line'
-    grep -q "export CLAUDE_CODE_EXPERIMENTAL_CODE_MODE='1'" "$D/out" || fail 'the tab script does not export the variable'
-}
-
+# The caller's Code Mode is carried to the new claude and nowhere else.
 case_code_mode_off_by_default() {
     need_cc || return
     set_relaunch --session-id "$SID" --cwd "$D" --wait-seconds 120 --dry-run
@@ -397,7 +386,7 @@ case_code_mode_off_by_default() {
     expect_dry_run "$D"
     check absent "$D/out" code_mode
     if grep -q 'CLAUDE_CODE_EXPERIMENTAL_CODE_MODE' "$D/out"; then
-        fail 'the tab script sets the variable without --code-mode'
+        fail 'the tab script sets the variable though the caller did not have it'
     fi
 }
 
@@ -409,6 +398,10 @@ case_code_mode_carried_from_env() {
     unset CLAUDE_CODE_EXPERIMENTAL_CODE_MODE
     expect_dry_run "$D"
     grep -q '"code_mode":true' "$D/out" || fail 'the caller'\''s Code Mode was not carried over'
+    grep -q "CLAUDE_CODE_EXPERIMENTAL_CODE_MODE='1' '" "$D/out" || fail 'the variable is not set on the claude command'
+    if grep -q 'export CLAUDE_CODE_EXPERIMENTAL_CODE_MODE' "$D/out"; then
+        fail 'the variable is exported, so the shell the tab is left with keeps it'
+    fi
 }
 
 case_model_kept_without_override() {
@@ -926,7 +919,6 @@ for name in \
     drops_worktree_flags \
     model_replaced \
     model_kept_without_override \
-    code_mode_flag \
     code_mode_off_by_default \
     code_mode_carried_from_env \
     special_chars_kept \

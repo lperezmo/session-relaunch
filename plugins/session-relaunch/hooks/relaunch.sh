@@ -10,11 +10,12 @@
 # and hands the new tab a script that waits on the old PID before running
 # `claude --resume <id>`, so two processes never write the same transcript.
 #
-# Usage: relaunch.sh --session-id ID --cwd DIR --wait-seconds N [--model M] [--code-mode] [--dry-run]
+# Usage: relaunch.sh --session-id ID --cwd DIR --wait-seconds N [--model M] [--dry-run]
 #
-# --code-mode starts the new claude with CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1. Without it
-# the variable is carried over as this process has it, since a terminal tab
-# does not inherit our environment.
+# CLAUDE_CODE_EXPERIMENTAL_CODE_MODE is carried over as this process has it: a
+# terminal tab does not inherit our environment, and a session started in
+# Code Mode cannot be resumed without it. It is set for the new claude only,
+# not for the shell the tab is left with.
 #
 # Prints one JSON line and exits 0: { ok, pid, terminal, exe, args, title }
 # (plus dir, script and would_use with --dry-run, lossy_args when argv had to
@@ -102,10 +103,6 @@ while [ $# -gt 0 ]; do
             ;;
         --dry-run)
             DRY_RUN=1
-            shift
-            ;;
-        --code-mode)
-            CODE_MODE=1
             shift
             ;;
         *) fail "unknown argument: $1" ;;
@@ -473,6 +470,11 @@ build_tab_script() {
     alive="kill -0 $CPID 2>/dev/null"
 
     launch="if command -v -- $exe_q >/dev/null 2>&1; then${nl}"
+    if [ -n "$CODE_MODE" ]; then
+        sq "$CODE_MODE"
+        cmd="CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=$Q $cmd"
+    fi
+
     launch+="    $cmd${nl}"
     launch+="else${nl}"
     launch+="    printf '%s\\n' $missing${nl}"
@@ -483,11 +485,6 @@ build_tab_script() {
     SCRIPT+="rm -f \"\$0\"${nl}"
     SCRIPT+="printf '\\033]0;%s\\007' $title${nl}"
     SCRIPT+="unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_CHILD_SESSION CLAUDE_CODE_SESSION_ID CLAUDE_PID CLAUDE_EFFORT CLAUDE_CODE_MESSAGING_SOCKET CLAUDE_CODE_MESSAGING_TOKEN CLAUDE_CODE_BRIDGE_SESSION_ID CLAUDE_CODE_SESSION_ATTENDED CLAUDE_CODE_EXECPATH${nl}"
-    if [ -n "$CODE_MODE" ]; then
-        sq "$CODE_MODE"
-        SCRIPT+="export CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=$Q${nl}"
-    fi
-
     SCRIPT+="cd -- $dir${nl}"
 
     if [ "$WAIT_SECONDS" -le 0 ]; then
